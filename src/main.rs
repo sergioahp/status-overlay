@@ -245,9 +245,12 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         let mut prev_session: u32 = 0;
         let mut prev_weekly: u32 = 0;
         let mut prev_session_reset_secs: u64 = 0;
+        let mut prev_weekly_reset_secs: u64 = 0;
         let mut last_data: Option<usage::UsageData> = None;
         let mut claude_recover_notice_sent = false;
-        let mut claude_pre_reset_notice_sent = false;
+        let mut claude_pre_reset_notice_sent = false; // 5h window
+        let mut claude_weekly_pre_2h_sent = false;
+        let mut claude_weekly_pre_1h_sent = false;
         let poll_every = Duration::from_secs(300);
         let min_gap   = Duration::from_secs(30);
         let mut last_fetch = Instant::now() - poll_every; // ensure first fetch is immediate
@@ -282,6 +285,30 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                             notify::Transition::Restored => notify::send("Claude weekly restored", "Weekly quota available again"),
                         }
                     }
+                    // Weekly pre-reset reminders (2h and 1h) if >=10% remaining
+                    if data.weekly_resets_secs > prev_weekly_reset_secs + 60 {
+                        claude_weekly_pre_1h_sent = false;
+                        claude_weekly_pre_2h_sent = false;
+                    }
+                    let weekly_remaining = 100.0 - data.weekly_pct;
+                    if data.weekly_resets_secs > 0
+                        && data.weekly_resets_secs <= 7200
+                        && weekly_remaining >= 10.0
+                        && !claude_weekly_pre_2h_sent
+                        && data.weekly_pct < 100.0
+                    {
+                        notify::send("Claude weekly resets in ~2h", "10%+ of weekly remains; use it before reset");
+                        claude_weekly_pre_2h_sent = true;
+                    }
+                    if data.weekly_resets_secs > 0
+                        && data.weekly_resets_secs <= 3600
+                        && weekly_remaining >= 10.0
+                        && !claude_weekly_pre_1h_sent
+                        && data.weekly_pct < 100.0
+                    {
+                        notify::send("Claude weekly resets in ~1h", "10%+ of weekly remains; use it before reset");
+                        claude_weekly_pre_1h_sent = true;
+                    }
                     // Pre-reset reminder when >30% remains and reset is within 1h
                     if data.session_resets_secs > prev_session_reset_secs + 60 {
                         claude_pre_reset_notice_sent = false; // reset after a window refresh
@@ -306,6 +333,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         claude_recover_notice_sent = false;
                     }
                     prev_session_reset_secs = data.session_resets_secs;
+                    prev_weekly_reset_secs = data.weekly_resets_secs;
                     prev_session = data.session_pct.round() as u32;
                     prev_weekly  = data.weekly_pct.round() as u32;
                     last_data = Some(data.clone());
@@ -347,11 +375,13 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     rt.spawn(async move {
         let mut prev_primary: u32 = 0;
         let mut prev_secondary: u32 = 0;
+        let mut prev_primary_reset_secs: u64 = 0;
         let mut prev_secondary_reset_secs: u64 = 0;
         let mut last_data: Option<codex::CodexData> = None;
         let mut codex_recover_notice_sent = false;
         let mut codex_pre_reset_2h_sent = false;
         let mut codex_pre_reset_1h_sent = false;
+        let mut codex_primary_pre_reset_sent = false;
         let poll_every = Duration::from_secs(60);
         loop {
             let result = tokio::task::spawn_blocking(codex::fetch).await.unwrap_or_default();
@@ -370,6 +400,20 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                             notify::Transition::Depleted => notify::send("Codex weekly depleted", "Weekly quota reached"),
                             notify::Transition::Restored => notify::send("Codex weekly restored", "Weekly quota available again"),
                         }
+                    }
+                    // Primary (5h) pre-reset: >30% remains, within 1h
+                    if data.primary_resets_secs > prev_primary_reset_secs + 60 {
+                        codex_primary_pre_reset_sent = false;
+                    }
+                    let primary_remaining = 100u32.saturating_sub(data.primary_pct);
+                    if data.primary_resets_secs > 0
+                        && data.primary_resets_secs <= 3600
+                        && primary_remaining >= 30
+                        && !codex_primary_pre_reset_sent
+                        && data.primary_pct < 100
+                    {
+                        notify::send("Codex 5h resets in ~1h", "30%+ still unused; grab it now");
+                        codex_primary_pre_reset_sent = true;
                     }
                     // Pre-reset reminders for secondary window: 2h and 1h if >=10% remains
                     if data.secondary_resets_secs > prev_secondary_reset_secs + 60 {
@@ -406,6 +450,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     } else {
                         codex_recover_notice_sent = false;
                     }
+                    prev_primary_reset_secs = data.primary_resets_secs;
                     prev_secondary_reset_secs = data.secondary_resets_secs;
                     prev_primary   = data.primary_pct;
                     prev_secondary = data.secondary_pct;
