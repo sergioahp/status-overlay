@@ -6,7 +6,7 @@ use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
 const CSS: &str = "
 window {
-    background: rgba(218, 119, 86, 0.65);
+    background: rgba(247, 118, 142, 0.45);
     border-radius: 16px;
 }
 #time {
@@ -19,12 +19,17 @@ window {
     color: rgba(255, 255, 255, 0.85);
     margin-bottom: 12px;
 }
+#usage-section {
+    background: rgba(218, 119, 86, 0.7);
+    border-radius: 10px;
+    padding: 8px;
+    margin-top: 8px;
+}
 #section-label {
     font-size: 11px;
     font-weight: bold;
     color: rgba(255, 255, 255, 0.6);
     letter-spacing: 1px;
-    margin-top: 8px;
     margin-bottom: 2px;
 }
 #usage-row {
@@ -64,6 +69,7 @@ calendar:selected {
 fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
     vbox.set_halign(gtk::Align::Fill);
+    vbox.set_widget_name("usage-section");
 
     let section_lbl = gtk::Label::new(Some("CLAUDE USAGE"));
     section_lbl.set_widget_name("section-label");
