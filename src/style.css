@@ -1,7 +1,7 @@
 window {
     background: rgba(40, 21, 63, 0.45); /* #28153f */
     border-radius: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.8);
+    border: 2px solid rgba(255, 255, 255, 0.8);
 }
 #time {
     font-size: 48px;

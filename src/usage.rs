@@ -1,4 +1,4 @@
-use chrono::{Local, DateTime, FixedOffset, Utc};
+use chrono::{Local, DateTime, Utc, Duration};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 
@@ -61,11 +61,16 @@ fn read_access_token() -> Option<String> {
 
 // "2026-03-08T17:00:00.198664+00:00" → "17:00Z"
 fn fmt_reset(iso: &str) -> String {
-    iso.split('T')
-        .nth(1)
-        .and_then(|t| t.get(..5))
-        .map(|t| format!("{t}Z"))
-        .unwrap_or_default()
+    DateTime::parse_from_rfc3339(iso)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+        .map(|dt| {
+            let local = dt.with_timezone(&Local);
+            let day = local.format("%a").to_string();
+            let time = local.format("%-I:%M %p").to_string();
+            format!("{day} {time}")
+        })
+        .unwrap_or_else(|| iso.to_string())
 }
 
 fn secs_until(iso: &str) -> u64 {
