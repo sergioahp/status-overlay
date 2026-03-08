@@ -8,6 +8,7 @@ pub struct CodexData {
     pub primary_resets_secs: u64,
     pub secondary_pct: u32,
     pub secondary_resets_secs: u64,
+    pub stale: bool,
 }
 
 #[derive(Deserialize)]
@@ -71,33 +72,33 @@ pub fn fmt_resets(secs: u64) -> String {
     }
 }
 
-pub fn fetch() -> CodexData {
+/// Returns `None` when the API call fails. Returns `Some(default)` when no token is configured.
+pub fn fetch() -> Option<CodexData> {
     let token = match read_token() {
         Some(t) => t,
-        None => return CodexData::default(),
+        None => return Some(CodexData::default()),
     };
 
-    let resp: UsageResponse = match ureq::get("https://chatgpt.com/backend-api/wham/usage")
+    let body = ureq::get("https://chatgpt.com/backend-api/wham/usage")
         .set("Authorization", &format!("Bearer {token}"))
         .set("Accept", "application/json")
         .set("User-Agent", "CodexBar")
         .call()
-        .ok()
-        .and_then(|r| r.into_string().ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-    {
-        Some(r) => r,
-        None => return CodexData::default(),
-    };
+        .ok()?
+        .into_string()
+        .ok()?;
+
+    let resp: UsageResponse = serde_json::from_str(&body).ok()?;
 
     let primary = resp.rate_limit.as_ref().and_then(|r| r.primary_window.as_ref());
     let secondary = resp.rate_limit.as_ref().and_then(|r| r.secondary_window.as_ref());
 
-    CodexData {
+    Some(CodexData {
         plan: resp.plan_type.unwrap_or_default(),
         primary_pct: primary.and_then(|w| w.used_percent).unwrap_or(0),
         primary_resets_secs: primary.and_then(|w| w.reset_after_seconds).unwrap_or(0),
         secondary_pct: secondary.and_then(|w| w.used_percent).unwrap_or(0),
         secondary_resets_secs: secondary.and_then(|w| w.reset_after_seconds).unwrap_or(0),
-    }
+        stale: false,
+    })
 }

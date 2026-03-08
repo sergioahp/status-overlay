@@ -12,6 +12,8 @@ pub struct UsageData {
     pub extra_limit_cents: f64,
     pub today_messages: u64,
     pub today_tool_calls: u64,
+    /// True when the API call failed and we are showing the last known values.
+    pub stale: bool,
 }
 
 #[derive(Deserialize)]
@@ -86,33 +88,35 @@ fn read_today_stats() -> (u64, u64) {
         .unwrap_or((0, 0))
 }
 
-pub fn fetch() -> UsageData {
+/// Returns `None` when the API call fails (network error, rate limit, etc.).
+/// The caller should retain and re-display the last known good value marked stale.
+/// Returns `Some` with `stale: false` on success, or when there is no token configured.
+pub fn fetch() -> Option<UsageData> {
     let (today_messages, today_tool_calls) = read_today_stats();
-    let base = UsageData {
-        today_messages,
-        today_tool_calls,
-        ..Default::default()
-    };
 
     let token = match read_access_token() {
         Some(t) => t,
-        None => return base,
+        None => {
+            return Some(UsageData {
+                today_messages,
+                today_tool_calls,
+                ..Default::default()
+            })
+        }
     };
 
-    let resp: OAuthUsageResponse = match ureq::get("https://api.anthropic.com/api/oauth/usage")
+    let body = ureq::get("https://api.anthropic.com/api/oauth/usage")
         .set("Authorization", &format!("Bearer {token}"))
         .set("anthropic-beta", "oauth-2025-04-20")
         .set("Accept", "application/json")
         .call()
-        .ok()
-        .and_then(|r| r.into_string().ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-    {
-        Some(r) => r,
-        None => return base,
-    };
+        .ok()?
+        .into_string()
+        .ok()?;
 
-    UsageData {
+    let resp: OAuthUsageResponse = serde_json::from_str(&body).ok()?;
+
+    Some(UsageData {
         session_pct: resp.five_hour.as_ref().and_then(|w| w.utilization).unwrap_or(0.0),
         session_resets: resp
             .five_hour
@@ -131,5 +135,6 @@ pub fn fetch() -> UsageData {
         extra_limit_cents: resp.extra_usage.as_ref().and_then(|e| e.monthly_limit).unwrap_or(0.0),
         today_messages,
         today_tool_calls,
-    }
+        stale: false,
+    })
 }

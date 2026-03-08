@@ -116,6 +116,8 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     vbox.append(&today_lbl);
 
     let update = move |d: &usage::UsageData| {
+        section_lbl.set_text(if d.stale { "CLAUDE USAGE (stale)" } else { "CLAUDE USAGE" });
+
         session_lbl.set_text(&format!("5h session  {:.0}%  resets {}", d.session_pct, d.session_resets));
         session_bar.set_fraction((d.session_pct / 100.0).clamp(0.0, 1.0));
 
@@ -167,6 +169,8 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
     vbox.append(&secondary_bar);
 
     let update = move |d: &codex::CodexData| {
+        section_lbl.set_text(if d.stale { "CODEX USAGE (stale)" } else { "CODEX USAGE" });
+
         let plan = if d.plan.is_empty() { String::new() } else { format!("  ({})", d.plan) };
         primary_lbl.set_text(&format!(
             "5h session{plan}  {}%  {}",
@@ -261,27 +265,38 @@ fn activate(app: &gtk::Application) {
     std::thread::spawn(move || {
         let mut prev_session: u32 = 0;
         let mut prev_weekly: u32 = 0;
+        let mut last_data: Option<usage::UsageData> = None;
         loop {
-            let data = usage::fetch();
-            // Notifications
-            if let Some(t) = notify::transition(prev_session, data.session_pct.round() as u32) {
-                match t {
-                    notify::Transition::Low      => notify::send("Claude session low", &format!("{}% of 5h session used", data.session_pct)),
-                    notify::Transition::Depleted => notify::send("Claude session depleted", "5h session quota reached"),
-                    notify::Transition::Restored => notify::send("Claude session restored", "5h session quota available again"),
+            match usage::fetch() {
+                Some(data) => {
+                    if let Some(t) = notify::transition(prev_session, data.session_pct.round() as u32) {
+                        match t {
+                            notify::Transition::Low      => notify::send("Claude session low", &format!("{}% of 5h session used", data.session_pct)),
+                            notify::Transition::Depleted => notify::send("Claude session depleted", "5h session quota reached"),
+                            notify::Transition::Restored => notify::send("Claude session restored", "5h session quota available again"),
+                        }
+                    }
+                    if let Some(t) = notify::transition(prev_weekly, data.weekly_pct.round() as u32) {
+                        match t {
+                            notify::Transition::Low      => notify::send("Claude weekly low", &format!("{}% of 7d quota used", data.weekly_pct)),
+                            notify::Transition::Depleted => notify::send("Claude weekly depleted", "7-day quota reached"),
+                            notify::Transition::Restored => notify::send("Claude weekly restored", "Weekly quota available again"),
+                        }
+                    }
+                    prev_session = data.session_pct.round() as u32;
+                    prev_weekly  = data.weekly_pct.round() as u32;
+                    last_data = Some(data.clone());
+                    let _ = sender.send(data);
+                }
+                None => {
+                    if let Some(ref cached) = last_data {
+                        let mut stale = cached.clone();
+                        stale.stale = true;
+                        let _ = sender.send(stale);
+                    }
                 }
             }
-            if let Some(t) = notify::transition(prev_weekly, data.weekly_pct.round() as u32) {
-                match t {
-                    notify::Transition::Low      => notify::send("Claude weekly low", &format!("{}% of 7d quota used", data.weekly_pct)),
-                    notify::Transition::Depleted => notify::send("Claude weekly depleted", "7-day quota reached"),
-                    notify::Transition::Restored => notify::send("Claude weekly restored", "Weekly quota available again"),
-                }
-            }
-            prev_session = data.session_pct.round() as u32;
-            prev_weekly  = data.weekly_pct.round() as u32;
-            let _ = sender.send(data);
-            std::thread::sleep(std::time::Duration::from_secs(60));
+            std::thread::sleep(std::time::Duration::from_secs(300));
         }
     });
 
@@ -301,26 +316,38 @@ fn activate(app: &gtk::Application) {
     std::thread::spawn(move || {
         let mut prev_primary: u32 = 0;
         let mut prev_secondary: u32 = 0;
+        let mut last_data: Option<codex::CodexData> = None;
         loop {
-            let data = codex::fetch();
-            if let Some(t) = notify::transition(prev_primary, data.primary_pct) {
-                match t {
-                    notify::Transition::Low      => notify::send("Codex session low", &format!("{}% of session used", data.primary_pct)),
-                    notify::Transition::Depleted => notify::send("Codex session depleted", "Session quota reached"),
-                    notify::Transition::Restored => notify::send("Codex session restored", "Session quota available again"),
+            match codex::fetch() {
+                Some(data) => {
+                    if let Some(t) = notify::transition(prev_primary, data.primary_pct) {
+                        match t {
+                            notify::Transition::Low      => notify::send("Codex session low", &format!("{}% of session used", data.primary_pct)),
+                            notify::Transition::Depleted => notify::send("Codex session depleted", "Session quota reached"),
+                            notify::Transition::Restored => notify::send("Codex session restored", "Session quota available again"),
+                        }
+                    }
+                    if let Some(t) = notify::transition(prev_secondary, data.secondary_pct) {
+                        match t {
+                            notify::Transition::Low      => notify::send("Codex weekly low", &format!("{}% of weekly quota used", data.secondary_pct)),
+                            notify::Transition::Depleted => notify::send("Codex weekly depleted", "Weekly quota reached"),
+                            notify::Transition::Restored => notify::send("Codex weekly restored", "Weekly quota available again"),
+                        }
+                    }
+                    prev_primary   = data.primary_pct;
+                    prev_secondary = data.secondary_pct;
+                    last_data = Some(data.clone());
+                    let _ = codex_tx.send(data);
+                }
+                None => {
+                    if let Some(ref cached) = last_data {
+                        let mut stale = cached.clone();
+                        stale.stale = true;
+                        let _ = codex_tx.send(stale);
+                    }
                 }
             }
-            if let Some(t) = notify::transition(prev_secondary, data.secondary_pct) {
-                match t {
-                    notify::Transition::Low      => notify::send("Codex weekly low", &format!("{}% of weekly quota used", data.secondary_pct)),
-                    notify::Transition::Depleted => notify::send("Codex weekly depleted", "Weekly quota reached"),
-                    notify::Transition::Restored => notify::send("Codex weekly restored", "Weekly quota available again"),
-                }
-            }
-            prev_primary   = data.primary_pct;
-            prev_secondary = data.secondary_pct;
-            let _ = codex_tx.send(data);
-            std::thread::sleep(std::time::Duration::from_secs(60));
+            std::thread::sleep(std::time::Duration::from_secs(120));
         }
     });
 
