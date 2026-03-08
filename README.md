@@ -74,7 +74,19 @@ layerrule = [
 
 `ignorealpha 0.1` prevents blurring fully transparent pixels, keeping the rounded corners clean.
 
-## 🤖 Claude usage data
+## 🤖 Claude + Codex usage
+
+Both sections refresh every 60 seconds. Desktop notifications fire via `notify-send` when:
+
+| Event | Threshold |
+|-------|-----------|
+| Low warning | ≥ 90% used |
+| Depleted | ≥ 100% / limit reached |
+| Restored | drops back below 30% |
+
+### Claude
+
+
 
 Reads from two local sources — no extra config needed if you use Claude Code:
 
@@ -83,7 +95,15 @@ Reads from two local sources — no extra config needed if you use Claude Code:
 | `~/.claude/.credentials.json` | OAuth token for the Anthropic API |
 | `~/.claude/stats-cache.json` | Today's message + tool-call counts |
 
-Live usage (session %, weekly %, extra spend) is fetched from `https://api.anthropic.com/api/oauth/usage` and refreshed every 60 seconds.
+Live usage (session %, weekly %, extra spend) is fetched from `https://api.anthropic.com/api/oauth/usage`.
+
+### Codex
+
+| Source | Data |
+|--------|------|
+| `~/.codex/auth.json` | OAuth token (or `OPENAI_API_KEY`) |
+
+Live usage (5h session %, 7d weekly %, plan type) is fetched from `https://chatgpt.com/backend-api/wham/usage`.
 
 ## 📄 License
 

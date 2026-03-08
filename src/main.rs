@@ -1,4 +1,6 @@
+mod codex;
 mod ipc;
+mod notify;
 mod usage;
 
 use chrono::Local;
@@ -51,6 +53,12 @@ progressbar trough {
 progressbar progress {
     background: rgba(255, 255, 255, 0.75);
     border-radius: 4px;
+}
+#codex-section {
+    background: rgba(16, 163, 127, 0.7);
+    border-radius: 10px;
+    padding: 8px;
+    margin-top: 8px;
 }
 calendar {
     background: transparent;
@@ -131,6 +139,53 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     (vbox, update)
 }
 
+fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    vbox.set_halign(gtk::Align::Fill);
+    vbox.set_widget_name("codex-section");
+
+    let section_lbl = gtk::Label::new(Some("CODEX USAGE"));
+    section_lbl.set_widget_name("section-label");
+    section_lbl.set_halign(gtk::Align::Start);
+
+    let primary_lbl = gtk::Label::new(None);
+    primary_lbl.set_widget_name("usage-row");
+    primary_lbl.set_halign(gtk::Align::Start);
+    let primary_bar = gtk::ProgressBar::new();
+    primary_bar.set_hexpand(true);
+
+    let secondary_lbl = gtk::Label::new(None);
+    secondary_lbl.set_widget_name("usage-row");
+    secondary_lbl.set_halign(gtk::Align::Start);
+    let secondary_bar = gtk::ProgressBar::new();
+    secondary_bar.set_hexpand(true);
+
+    vbox.append(&section_lbl);
+    vbox.append(&primary_lbl);
+    vbox.append(&primary_bar);
+    vbox.append(&secondary_lbl);
+    vbox.append(&secondary_bar);
+
+    let update = move |d: &codex::CodexData| {
+        let plan = if d.plan.is_empty() { String::new() } else { format!("  ({})", d.plan) };
+        primary_lbl.set_text(&format!(
+            "5h session{plan}  {}%  {}",
+            d.primary_pct,
+            codex::fmt_resets(d.primary_resets_secs)
+        ));
+        primary_bar.set_fraction((d.primary_pct as f64 / 100.0).clamp(0.0, 1.0));
+
+        secondary_lbl.set_text(&format!(
+            "7d weekly   {}%  {}",
+            d.secondary_pct,
+            codex::fmt_resets(d.secondary_resets_secs)
+        ));
+        secondary_bar.set_fraction((d.secondary_pct as f64 / 100.0).clamp(0.0, 1.0));
+    };
+
+    (vbox, update)
+}
+
 fn activate(app: &gtk::Application) {
     let window = gtk::ApplicationWindow::new(app);
 
@@ -202,17 +257,77 @@ fn activate(app: &gtk::Application) {
     let (sender, receiver) = std::sync::mpsc::channel::<usage::UsageData>();
     let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
 
-    // Background thread fetches every 60s
-    std::thread::spawn(move || loop {
-        let _ = sender.send(usage::fetch());
-        std::thread::sleep(std::time::Duration::from_secs(60));
+    // --- Claude usage thread ---
+    std::thread::spawn(move || {
+        let mut prev_session: u32 = 0;
+        let mut prev_weekly: u32 = 0;
+        loop {
+            let data = usage::fetch();
+            // Notifications
+            if let Some(t) = notify::transition(prev_session, data.session_pct.round() as u32) {
+                match t {
+                    notify::Transition::Low      => notify::send("Claude session low", &format!("{}% of 5h session used", data.session_pct)),
+                    notify::Transition::Depleted => notify::send("Claude session depleted", "5h session quota reached"),
+                    notify::Transition::Restored => notify::send("Claude session restored", "5h session quota available again"),
+                }
+            }
+            if let Some(t) = notify::transition(prev_weekly, data.weekly_pct.round() as u32) {
+                match t {
+                    notify::Transition::Low      => notify::send("Claude weekly low", &format!("{}% of 7d quota used", data.weekly_pct)),
+                    notify::Transition::Depleted => notify::send("Claude weekly depleted", "7-day quota reached"),
+                    notify::Transition::Restored => notify::send("Claude weekly restored", "Weekly quota available again"),
+                }
+            }
+            prev_session = data.session_pct.round() as u32;
+            prev_weekly  = data.weekly_pct.round() as u32;
+            let _ = sender.send(data);
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
     });
 
-    // GTK timer drains the channel
     let recv = receiver.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
         if let Ok(data) = recv.lock().unwrap().try_recv() {
             update_usage(&data);
+        }
+        glib::ControlFlow::Continue
+    });
+
+    // --- Codex usage section ---
+    let (codex_box, update_codex) = build_codex_section();
+    let (codex_tx, codex_rx) = std::sync::mpsc::channel::<codex::CodexData>();
+    let codex_rx = std::sync::Arc::new(std::sync::Mutex::new(codex_rx));
+
+    std::thread::spawn(move || {
+        let mut prev_primary: u32 = 0;
+        let mut prev_secondary: u32 = 0;
+        loop {
+            let data = codex::fetch();
+            if let Some(t) = notify::transition(prev_primary, data.primary_pct) {
+                match t {
+                    notify::Transition::Low      => notify::send("Codex session low", &format!("{}% of session used", data.primary_pct)),
+                    notify::Transition::Depleted => notify::send("Codex session depleted", "Session quota reached"),
+                    notify::Transition::Restored => notify::send("Codex session restored", "Session quota available again"),
+                }
+            }
+            if let Some(t) = notify::transition(prev_secondary, data.secondary_pct) {
+                match t {
+                    notify::Transition::Low      => notify::send("Codex weekly low", &format!("{}% of weekly quota used", data.secondary_pct)),
+                    notify::Transition::Depleted => notify::send("Codex weekly depleted", "Weekly quota reached"),
+                    notify::Transition::Restored => notify::send("Codex weekly restored", "Weekly quota available again"),
+                }
+            }
+            prev_primary   = data.primary_pct;
+            prev_secondary = data.secondary_pct;
+            let _ = codex_tx.send(data);
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    });
+
+    let codex_recv = codex_rx.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+        if let Ok(data) = codex_recv.lock().unwrap().try_recv() {
+            update_codex(&data);
         }
         glib::ControlFlow::Continue
     });
@@ -223,6 +338,7 @@ fn activate(app: &gtk::Application) {
     vbox.append(&time_label);
     vbox.append(&date_label);
     vbox.append(&usage_box);
+    vbox.append(&codex_box);
     vbox.append(&calendar);
 
     window.set_child(Some(&vbox));

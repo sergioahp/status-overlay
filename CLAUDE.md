@@ -57,6 +57,18 @@ Plain text over a Unix socket. Each message is a single line.
 | `quit\n`     | `OK quitting\n`  |
 | unknown      | `ERR unknown: …` |
 
+## Codex usage API
+
+- **Endpoint:** `GET https://chatgpt.com/backend-api/wham/usage`
+- **Auth:** `Authorization: Bearer <token>` from `~/.codex/auth.json`
+  - Try `tokens.access_token` first, fall back to `OPENAI_API_KEY`
+  - Respects `$CODEX_HOME` env var override
+- **Key fields:** `rate_limit.primary_window.used_percent` (5h),
+  `rate_limit.secondary_window.used_percent` (7d),
+  `rate_limit.*.reset_after_seconds`, `plan_type`
+- `credits.balance` is a **string**, not a number.
+- Refreshed every 60 s from a background thread.
+
 ## Claude usage API
 
 - **Endpoint:** `GET https://api.anthropic.com/api/oauth/usage`
