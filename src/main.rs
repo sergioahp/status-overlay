@@ -347,7 +347,7 @@ fn activate(app: &gtk::Application) {
                     }
                 }
             }
-            std::thread::sleep(std::time::Duration::from_secs(120));
+            std::thread::sleep(std::time::Duration::from_secs(60));
         }
     });
 
