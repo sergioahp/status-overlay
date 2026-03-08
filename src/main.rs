@@ -446,10 +446,8 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         glib::ControlFlow::Continue
     });
 
-    let claude_on_show = claude_refresh.clone();
     let codex_on_show = codex_refresh.clone();
     window.connect_show(move |_| {
-        claude_on_show.notify_one();
         codex_on_show.notify_one();
     });
 
