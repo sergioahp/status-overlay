@@ -22,7 +22,7 @@ pub fn make_usage_plot(history: Rc<RefCell<Vec<UsageSample>>>) -> gtk::DrawingAr
 
     let history_for_draw = history.clone();
     area.set_draw_func(move |_area, cr, width, height| {
-        let backend = match CairoBackend::new(cr, (width as u32, height as u32)) {
+        let backend: CairoBackend<'_> = match CairoBackend::new(cr, (width as u32, height as u32)) {
             Ok(b) => b,
             Err(_) => return,
         };
@@ -57,7 +57,7 @@ pub fn make_usage_plot(history: Rc<RefCell<Vec<UsageSample>>>) -> gtk::DrawingAr
             .disable_mesh()
             .x_labels(0)
             .y_labels(4)
-            .y_label_style(("Sans", 9).color(&WHITE.mix(0.7)))
+            .y_label_style(TextStyle::from(("Sans", 9).into_font()).with_color(&WHITE.mix(0.7)))
             .draw();
 
         let _ = chart.draw_series(LineSeries::new(
@@ -81,7 +81,7 @@ pub fn make_codex_plot(history: Rc<RefCell<Vec<CodexSample>>>) -> gtk::DrawingAr
 
     let history_for_draw = history.clone();
     area.set_draw_func(move |_area, cr, width, height| {
-        let backend = match CairoBackend::new(cr, (width as u32, height as u32)) {
+        let backend: CairoBackend<'_> = match CairoBackend::new(cr, (width as u32, height as u32)) {
             Ok(b) => b,
             Err(_) => return,
         };
@@ -116,7 +116,7 @@ pub fn make_codex_plot(history: Rc<RefCell<Vec<CodexSample>>>) -> gtk::DrawingAr
             .disable_mesh()
             .x_labels(0)
             .y_labels(4)
-            .y_label_style(("Sans", 9).color(&WHITE.mix(0.7)))
+            .y_label_style(TextStyle::from(("Sans", 9).into_font()).with_color(&WHITE.mix(0.7)))
             .draw();
 
         let _ = chart.draw_series(LineSeries::new(

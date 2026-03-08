@@ -85,7 +85,7 @@ calendar:selected {
 
 fn build_usage_section(
     history: Rc<RefCell<Vec<storage::UsageSample>>>,
-    plot: &gtk::DrawingArea,
+    plot: gtk::DrawingArea,
 ) -> (gtk::Box, impl Fn(&usage::UsageData)) {
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
     vbox.set_halign(gtk::Align::Fill);
@@ -130,7 +130,7 @@ fn build_usage_section(
     vbox.append(&extra_lbl);
     vbox.append(&today_lbl);
     vbox.append(&updated_lbl);
-    vbox.append(plot);
+    vbox.append(&plot);
 
     let plot_clone = plot.clone();
     let history_for_update = history.clone();
@@ -179,7 +179,7 @@ fn build_usage_section(
 
 fn build_codex_section(
     history: Rc<RefCell<Vec<storage::CodexSample>>>,
-    plot: &gtk::DrawingArea,
+    plot: gtk::DrawingArea,
 ) -> (gtk::Box, impl Fn(&codex::CodexData)) {
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
     vbox.set_halign(gtk::Align::Fill);
@@ -211,7 +211,7 @@ fn build_codex_section(
     vbox.append(&secondary_lbl);
     vbox.append(&secondary_bar);
     vbox.append(&codex_updated_lbl);
-    vbox.append(plot);
+    vbox.append(&plot);
 
     let plot_clone = plot.clone();
     let history_for_update = history.clone();
@@ -429,7 +429,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     // Usage section + plot
     let usage_history = Rc::new(RefCell::new(storage::load_usage_history()));
     let usage_plot = plot::make_usage_plot(usage_history.clone());
-    let (usage_box, update_usage) = build_usage_section(usage_history.clone(), &usage_plot);
+    let (usage_box, update_usage) = build_usage_section(usage_history.clone(), usage_plot.clone());
 
     let claude_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
 
@@ -512,7 +512,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     // --- Codex usage section + plot ---
     let codex_history = Rc::new(RefCell::new(storage::load_codex_history()));
     let codex_plot = plot::make_codex_plot(codex_history.clone());
-    let (codex_box, update_codex) = build_codex_section(codex_history.clone(), &codex_plot);
+    let (codex_box, update_codex) = build_codex_section(codex_history.clone(), codex_plot.clone());
     let (codex_tx, codex_rx) = async_channel::unbounded::<codex::CodexData>();
 
     let codex_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
