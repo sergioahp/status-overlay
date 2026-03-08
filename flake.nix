@@ -27,7 +27,12 @@
         ];
 
         commonArgs = {
-          src = ./.;
+          src = pkgs.lib.cleanSourceWith {
+            src = ./.;
+            filter = path: type:
+              (craneLib.filterCargoSources path type)
+              || pkgs.lib.hasSuffix ".css" path;
+          };
           buildInputs = [ pkgs.gtk4 pkgs.gtk4-layer-shell ];
           nativeBuildInputs = [ pkgs.pkg-config pkgs.wrapGAppsHook4 ];
         };
