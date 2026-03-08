@@ -1,5 +1,6 @@
 # 🟠 status-overlay
 
+> Claude usage API integration based on [CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger (steipete).
 > IPC daemon pattern inspired by [hyprvoice](https://github.com/leonardotrapani/hyprvoice) by Leonardo Trapani.
 
 A floating Wayland overlay built in Rust with GTK4 and layer-shell. Shows the time, date, calendar, and live Claude AI usage stats — all in a blurred, translucent panel that floats above everything without stealing focus.
