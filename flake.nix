@@ -24,6 +24,8 @@
           pkgs.pango
           pkgs.gdk-pixbuf
           pkgs.graphene
+          pkgs.fontconfig
+          pkgs.freetype
         ];
 
         commonArgs = {
@@ -65,6 +67,8 @@
             pkgs.pango
             pkgs.gdk-pixbuf
             pkgs.graphene
+            pkgs.fontconfig
+            pkgs.freetype
           ];
         };
       });
