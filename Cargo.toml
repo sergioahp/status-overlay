@@ -1,0 +1,9 @@
+[package]
+name = "status-overlay"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gtk4-layer-shell = "0.5"
+gio = "0.20"
+gtk = { package = "gtk4", version = "0.9" }
