@@ -3,12 +3,15 @@ mod ipc;
 mod notify;
 mod usage;
 mod storage;
+mod plot;
 
 use chrono::Local;
 use gtk::prelude::*;
 use gtk::gdk;
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use std::time::{Duration, Instant};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use plotters::prelude::*;
 
@@ -80,7 +83,10 @@ calendar:selected {
 }
 ";
 
-fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
+fn build_usage_section(
+    history: Rc<RefCell<Vec<storage::UsageSample>>>,
+    plot: &gtk::DrawingArea,
+) -> (gtk::Box, impl Fn(&usage::UsageData)) {
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
     vbox.set_halign(gtk::Align::Fill);
     vbox.set_widget_name("usage-section");
@@ -116,10 +122,6 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     updated_lbl.set_widget_name("today-label");
     updated_lbl.set_halign(gtk::Align::Start);
 
-    let plot = gtk::Picture::new();
-    plot.set_hexpand(true);
-    plot.set_size_request(320, 90);
-
     vbox.append(&section_lbl);
     vbox.append(&session_lbl);
     vbox.append(&session_bar);
@@ -128,7 +130,10 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     vbox.append(&extra_lbl);
     vbox.append(&today_lbl);
     vbox.append(&updated_lbl);
-    vbox.append(&plot);
+    vbox.append(plot);
+
+    let plot_clone = plot.clone();
+    let history_for_update = history.clone();
 
     let update = move |d: &usage::UsageData| {
         section_lbl.set_text(if d.stale { "CLAUDE USAGE (stale)" } else { "CLAUDE USAGE" });
@@ -154,17 +159,28 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
 
         if !d.stale {
             updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
+
+            let sample = storage::append_usage_sample(d);
+            {
+                let mut hist = history_for_update.borrow_mut();
+                hist.push(sample);
+                if hist.len() > 500 {
+                    let drop = hist.len() - 500;
+                    hist.drain(0..drop);
+                }
+            }
+            plot_clone.queue_draw();
         }
 
-        if let Some(tex) = draw_usage_plot(&storage::load_usage_history()) {
-            plot.set_paintable(Some(&tex));
-        }
     };
 
     (vbox, update)
 }
 
-fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
+fn build_codex_section(
+    history: Rc<RefCell<Vec<storage::CodexSample>>>,
+    plot: &gtk::DrawingArea,
+) -> (gtk::Box, impl Fn(&codex::CodexData)) {
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
     vbox.set_halign(gtk::Align::Fill);
     vbox.set_widget_name("codex-section");
@@ -189,17 +205,16 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
     codex_updated_lbl.set_widget_name("today-label");
     codex_updated_lbl.set_halign(gtk::Align::Start);
 
-    let plot = gtk::Picture::new();
-    plot.set_hexpand(true);
-    plot.set_size_request(320, 90);
-
     vbox.append(&section_lbl);
     vbox.append(&primary_lbl);
     vbox.append(&primary_bar);
     vbox.append(&secondary_lbl);
     vbox.append(&secondary_bar);
     vbox.append(&codex_updated_lbl);
-    vbox.append(&plot);
+    vbox.append(plot);
+
+    let plot_clone = plot.clone();
+    let history_for_update = history.clone();
 
     let update = move |d: &codex::CodexData| {
         section_lbl.set_text(if d.stale { "CODEX USAGE (stale)" } else { "CODEX USAGE" });
@@ -221,11 +236,19 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
 
         if !d.stale {
             codex_updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
+
+            let sample = storage::append_codex_sample(d);
+            {
+                let mut hist = history_for_update.borrow_mut();
+                hist.push(sample);
+                if hist.len() > 500 {
+                    let drop = hist.len() - 500;
+                    hist.drain(0..drop);
+                }
+            }
+            plot_clone.queue_draw();
         }
 
-        if let Some(tex) = draw_codex_plot(&storage::load_codex_history()) {
-            plot.set_paintable(Some(&tex));
-        }
     };
 
     (vbox, update)
@@ -403,8 +426,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         glib::ControlFlow::Continue
     });
 
-    // Usage section
-    let (usage_box, update_usage) = build_usage_section();
+    // Usage section + plot
+    let usage_history = Rc::new(RefCell::new(storage::load_usage_history()));
+    let usage_plot = plot::make_usage_plot(usage_history.clone());
+    let (usage_box, update_usage) = build_usage_section(usage_history.clone(), &usage_plot);
 
     let claude_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
 
@@ -484,8 +509,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         }
     });
 
-    // --- Codex usage section ---
-    let (codex_box, update_codex) = build_codex_section();
+    // --- Codex usage section + plot ---
+    let codex_history = Rc::new(RefCell::new(storage::load_codex_history()));
+    let codex_plot = plot::make_codex_plot(codex_history.clone());
+    let (codex_box, update_codex) = build_codex_section(codex_history.clone(), &codex_plot);
     let (codex_tx, codex_rx) = async_channel::unbounded::<codex::CodexData>();
 
     let codex_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -556,6 +583,9 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     vbox.append(&usage_box);
     vbox.append(&codex_box);
     vbox.append(&calendar);
+
+    usage_plot.queue_draw();
+    codex_plot.queue_draw();
 
     window.set_child(Some(&vbox));
 

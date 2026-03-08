@@ -67,30 +67,34 @@ fn trim_vec<T>(v: &mut Vec<T>, cap: usize) {
     }
 }
 
-pub fn append_usage_sample(data: &crate::usage::UsageData) {
+pub fn append_usage_sample(data: &crate::usage::UsageData) -> UsageSample {
     let mut hist: Vec<UsageSample> = load_json("usage_history.json").unwrap_or_default();
-    hist.push(UsageSample {
+    let sample = UsageSample {
         ts: Utc::now().timestamp(),
         session_pct: data.session_pct,
         weekly_pct: data.weekly_pct,
-    });
+    };
+    hist.push(sample.clone());
     trim_vec(&mut hist, 500);
     let _ = save_json("usage_history.json", &hist);
+    sample
 }
 
 pub fn load_usage_history() -> Vec<UsageSample> {
     load_json("usage_history.json").unwrap_or_default()
 }
 
-pub fn append_codex_sample(data: &crate::codex::CodexData) {
+pub fn append_codex_sample(data: &crate::codex::CodexData) -> CodexSample {
     let mut hist: Vec<CodexSample> = load_json("codex_history.json").unwrap_or_default();
-    hist.push(CodexSample {
+    let sample = CodexSample {
         ts: Utc::now().timestamp(),
         primary_pct: data.primary_pct,
         secondary_pct: data.secondary_pct,
-    });
+    };
+    hist.push(sample.clone());
     trim_vec(&mut hist, 500);
     let _ = save_json("codex_history.json", &hist);
+    sample
 }
 
 pub fn load_codex_history() -> Vec<CodexSample> {
