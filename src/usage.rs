@@ -1,8 +1,8 @@
 use chrono::Local;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageData {
     pub session_pct: f64,
     pub session_resets: String,

@@ -2,6 +2,7 @@ mod codex;
 mod ipc;
 mod notify;
 mod usage;
+mod storage;
 
 use chrono::Local;
 use gtk::prelude::*;
@@ -278,6 +279,11 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
 
     let claude_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
 
+    if let Some(mut cached) = storage::load_usage() {
+        cached.stale = true;
+        update_usage(&cached);
+    }
+
     // --- Claude usage task ---
     let (claude_tx, claude_rx) = async_channel::unbounded::<usage::UsageData>();
     let claude_notify = claude_refresh.clone();
@@ -322,6 +328,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     prev_session = data.session_pct.round() as u32;
                     prev_weekly  = data.weekly_pct.round() as u32;
                     last_data = Some(data.clone());
+                    storage::save_usage(&data);
                     let _ = claude_tx.send(data).await;
                     last_fetch = Instant::now();
                 }
@@ -352,6 +359,11 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
 
     let codex_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
 
+    if let Some(mut cached) = storage::load_codex() {
+        cached.stale = true;
+        update_codex(&cached);
+    }
+
     let codex_notify = codex_refresh.clone();
     rt.spawn(async move {
         let mut prev_primary: u32 = 0;
@@ -379,6 +391,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     prev_primary   = data.primary_pct;
                     prev_secondary = data.secondary_pct;
                     last_data = Some(data.clone());
+                    storage::save_codex(&data);
                     let _ = codex_tx.send(data).await;
                 }
                 None => {

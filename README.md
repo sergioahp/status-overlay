@@ -47,6 +47,7 @@ status-overlay quit     # kill the daemon
 ```
 
 The socket lives at `$XDG_RUNTIME_DIR/status-overlay.sock`.
+Last successful fetches are cached to disk at `$XDG_STATE_HOME/status-overlay/{usage,codex}.json` (falls back to `~/.local/state`).
 
 Press `q` while the overlay has focus to hide it.
 
