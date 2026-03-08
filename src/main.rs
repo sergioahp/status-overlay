@@ -1,3 +1,4 @@
+mod ipc;
 mod usage;
 
 use chrono::Local;
@@ -236,10 +237,43 @@ fn activate(app: &gtk::Application) {
     });
     window.add_controller(key_controller);
 
+    // IPC channel: socket thread → GTK main loop
+    let (ipc_tx, ipc_rx) = std::sync::mpsc::channel::<ipc::Command>();
+    let ipc_rx = std::sync::Arc::new(std::sync::Mutex::new(ipc_rx));
+
+    std::thread::spawn(move || ipc::listen(ipc_tx));
+
+    let win = window.clone();
+    let ipc_recv = ipc_rx.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+        if let Ok(cmd) = ipc_recv.lock().unwrap().try_recv() {
+            match cmd {
+                ipc::Command::Show   => win.present(),
+                ipc::Command::Hide   => win.hide(),
+                ipc::Command::Toggle => {
+                    if win.is_visible() { win.hide(); } else { win.present(); }
+                }
+                ipc::Command::Quit   => win.close(),
+            }
+        }
+        glib::ControlFlow::Continue
+    });
+
     window.present();
 }
 
 fn main() {
+    // Client mode: status-overlay <show|hide|toggle|quit>
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match ipc::send(&args[1]) {
+            Ok(resp) => println!("{resp}"),
+            Err(e)   => eprintln!("error: {e} (is the daemon running?)"),
+        }
+        return;
+    }
+
+    // Daemon mode
     let app = gtk::Application::new(
         Some("dev.status-overlay"),
         gio::ApplicationFlags::default(),
