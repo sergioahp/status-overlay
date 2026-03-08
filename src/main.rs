@@ -6,7 +6,7 @@ use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
 const CSS: &str = "
 window {
-    background: rgba(247, 118, 142, 0.45);
+    background: rgba(218, 119, 86, 0.65);
     border-radius: 16px;
 }
 #time {
@@ -129,6 +129,7 @@ fn activate(app: &gtk::Application) {
 
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
+    window.set_namespace(Some("status-overlay"));
 
     let anchors = [
         (Edge::Left, true),
