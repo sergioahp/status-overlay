@@ -107,6 +107,10 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     today_lbl.set_widget_name("today-label");
     today_lbl.set_halign(gtk::Align::Start);
 
+    let updated_lbl = gtk::Label::new(None);
+    updated_lbl.set_widget_name("today-label");
+    updated_lbl.set_halign(gtk::Align::Start);
+
     vbox.append(&section_lbl);
     vbox.append(&session_lbl);
     vbox.append(&session_bar);
@@ -114,6 +118,7 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     vbox.append(&weekly_bar);
     vbox.append(&extra_lbl);
     vbox.append(&today_lbl);
+    vbox.append(&updated_lbl);
 
     let update = move |d: &usage::UsageData| {
         section_lbl.set_text(if d.stale { "CLAUDE USAGE (stale)" } else { "CLAUDE USAGE" });
@@ -136,6 +141,10 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
             "Today  {} msgs  ·  {} tool calls",
             d.today_messages, d.today_tool_calls
         ));
+
+        if !d.stale {
+            updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
+        }
     };
 
     (vbox, update)
@@ -162,11 +171,16 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
     let secondary_bar = gtk::ProgressBar::new();
     secondary_bar.set_hexpand(true);
 
+    let codex_updated_lbl = gtk::Label::new(None);
+    codex_updated_lbl.set_widget_name("today-label");
+    codex_updated_lbl.set_halign(gtk::Align::Start);
+
     vbox.append(&section_lbl);
     vbox.append(&primary_lbl);
     vbox.append(&primary_bar);
     vbox.append(&secondary_lbl);
     vbox.append(&secondary_bar);
+    vbox.append(&codex_updated_lbl);
 
     let update = move |d: &codex::CodexData| {
         section_lbl.set_text(if d.stale { "CODEX USAGE (stale)" } else { "CODEX USAGE" });
@@ -185,12 +199,16 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
             codex::fmt_resets(d.secondary_resets_secs)
         ));
         secondary_bar.set_fraction((d.secondary_pct as f64 / 100.0).clamp(0.0, 1.0));
+
+        if !d.stale {
+            codex_updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
+        }
     };
 
     (vbox, update)
 }
 
-fn activate(app: &gtk::Application) {
+fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     let window = gtk::ApplicationWindow::new(app);
 
     window.init_layer_shell();
@@ -257,17 +275,15 @@ fn activate(app: &gtk::Application) {
     // Usage section
     let (usage_box, update_usage) = build_usage_section();
 
-    // Channel: background thread → GTK main loop
-    let (sender, receiver) = std::sync::mpsc::channel::<usage::UsageData>();
-    let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
-
-    // --- Claude usage thread ---
-    std::thread::spawn(move || {
+    // --- Claude usage task ---
+    let (claude_tx, claude_rx) = async_channel::unbounded::<usage::UsageData>();
+    rt.spawn(async move {
         let mut prev_session: u32 = 0;
         let mut prev_weekly: u32 = 0;
         let mut last_data: Option<usage::UsageData> = None;
         loop {
-            match usage::fetch() {
+            let result = tokio::task::spawn_blocking(usage::fetch).await.unwrap_or_default();
+            match result {
                 Some(data) => {
                     if let Some(t) = notify::transition(prev_session, data.session_pct.round() as u32) {
                         match t {
@@ -286,39 +302,37 @@ fn activate(app: &gtk::Application) {
                     prev_session = data.session_pct.round() as u32;
                     prev_weekly  = data.weekly_pct.round() as u32;
                     last_data = Some(data.clone());
-                    let _ = sender.send(data);
+                    let _ = claude_tx.send(data).await;
                 }
                 None => {
                     if let Some(ref cached) = last_data {
                         let mut stale = cached.clone();
                         stale.stale = true;
-                        let _ = sender.send(stale);
+                        let _ = claude_tx.send(stale).await;
                     }
                 }
             }
-            std::thread::sleep(std::time::Duration::from_secs(300));
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
         }
     });
 
-    let recv = receiver.clone();
-    glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
-        if let Ok(data) = recv.lock().unwrap().try_recv() {
+    glib::spawn_future_local(async move {
+        while let Ok(data) = claude_rx.recv().await {
             update_usage(&data);
         }
-        glib::ControlFlow::Continue
     });
 
     // --- Codex usage section ---
     let (codex_box, update_codex) = build_codex_section();
-    let (codex_tx, codex_rx) = std::sync::mpsc::channel::<codex::CodexData>();
-    let codex_rx = std::sync::Arc::new(std::sync::Mutex::new(codex_rx));
+    let (codex_tx, codex_rx) = async_channel::unbounded::<codex::CodexData>();
 
-    std::thread::spawn(move || {
+    rt.spawn(async move {
         let mut prev_primary: u32 = 0;
         let mut prev_secondary: u32 = 0;
         let mut last_data: Option<codex::CodexData> = None;
         loop {
-            match codex::fetch() {
+            let result = tokio::task::spawn_blocking(codex::fetch).await.unwrap_or_default();
+            match result {
                 Some(data) => {
                     if let Some(t) = notify::transition(prev_primary, data.primary_pct) {
                         match t {
@@ -337,26 +351,24 @@ fn activate(app: &gtk::Application) {
                     prev_primary   = data.primary_pct;
                     prev_secondary = data.secondary_pct;
                     last_data = Some(data.clone());
-                    let _ = codex_tx.send(data);
+                    let _ = codex_tx.send(data).await;
                 }
                 None => {
                     if let Some(ref cached) = last_data {
                         let mut stale = cached.clone();
                         stale.stale = true;
-                        let _ = codex_tx.send(stale);
+                        let _ = codex_tx.send(stale).await;
                     }
                 }
             }
-            std::thread::sleep(std::time::Duration::from_secs(60));
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
     });
 
-    let codex_recv = codex_rx.clone();
-    glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
-        if let Ok(data) = codex_recv.lock().unwrap().try_recv() {
+    glib::spawn_future_local(async move {
+        while let Ok(data) = codex_rx.recv().await {
             update_codex(&data);
         }
-        glib::ControlFlow::Continue
     });
 
     // Calendar
@@ -417,10 +429,16 @@ fn main() {
     }
 
     // Daemon mode
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
     let app = gtk::Application::new(
         Some("dev.status-overlay"),
         gio::ApplicationFlags::default(),
     );
-    app.connect_activate(activate);
+    let handle = rt.handle().clone();
+    app.connect_activate(move |app| activate(app, handle.clone()));
     app.run();
 }
