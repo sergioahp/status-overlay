@@ -287,11 +287,9 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     last_fetch = Instant::now();
                 }
                 None => {
-                    if let Some(ref cached) = last_data {
-                        let mut stale = cached.clone();
-                        stale.stale = true;
-                        let _ = claude_tx.send(stale).await;
-                    }
+                    let mut stale = last_data.clone().unwrap_or_default();
+                    stale.stale = true;
+                    let _ = claude_tx.send(stale).await;
                 }
             }
             tokio::select! {
@@ -349,11 +347,9 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     let _ = codex_tx.send(data).await;
                 }
                 None => {
-                    if let Some(ref cached) = last_data {
-                        let mut stale = cached.clone();
-                        stale.stale = true;
-                        let _ = codex_tx.send(stale).await;
-                    }
+                    let mut stale = last_data.clone().unwrap_or_default();
+                    stale.stale = true;
+                    let _ = codex_tx.send(stale).await;
                 }
             }
             tokio::select! {
