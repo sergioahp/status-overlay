@@ -10,6 +10,7 @@ pub enum Command {
     Show,
     Hide,
     Toggle,
+    Refresh,
     Quit,
 }
 
@@ -56,10 +57,11 @@ fn handle(mut stream: UnixStream, tx: &Sender<Command>) {
     }
 
     let (cmd, response) = match line.trim() {
-        "show"   => (Some(Command::Show),   "OK shown"),
-        "hide"   => (Some(Command::Hide),   "OK hidden"),
-        "toggle" => (Some(Command::Toggle), "OK toggled"),
-        "quit"   => (Some(Command::Quit),   "OK quitting"),
+        "show"    => (Some(Command::Show),    "OK shown"),
+        "hide"    => (Some(Command::Hide),    "OK hidden"),
+        "toggle"  => (Some(Command::Toggle),  "OK toggled"),
+        "refresh" => (Some(Command::Refresh), "OK refreshing"),
+        "quit"    => (Some(Command::Quit),    "OK quitting"),
         other    => {
             let _ = writeln!(stream, "ERR unknown: {other}");
             return;

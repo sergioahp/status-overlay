@@ -6,6 +6,7 @@ mod usage;
 use chrono::Local;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
+use std::time::{Duration, Instant};
 
 const CSS: &str = "
 window {
@@ -275,13 +276,32 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     // Usage section
     let (usage_box, update_usage) = build_usage_section();
 
+    let claude_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
+
     // --- Claude usage task ---
     let (claude_tx, claude_rx) = async_channel::unbounded::<usage::UsageData>();
+    let claude_notify = claude_refresh.clone();
     rt.spawn(async move {
         let mut prev_session: u32 = 0;
         let mut prev_weekly: u32 = 0;
         let mut last_data: Option<usage::UsageData> = None;
+        let poll_every = Duration::from_secs(300);
+        let min_gap   = Duration::from_secs(30);
+        let mut last_fetch = Instant::now() - poll_every; // ensure first fetch is immediate
         loop {
+            // Enforce 30s min gap between Claude fetches
+            loop {
+                let elapsed = Instant::now().saturating_duration_since(last_fetch);
+                if elapsed >= min_gap {
+                    break;
+                }
+                let remaining = min_gap - elapsed;
+                tokio::select! {
+                    _ = tokio::time::sleep(remaining) => {},
+                    _ = claude_notify.notified() => {},
+                }
+            }
+
             let result = tokio::task::spawn_blocking(usage::fetch).await.unwrap_or_default();
             match result {
                 Some(data) => {
@@ -303,6 +323,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     prev_weekly  = data.weekly_pct.round() as u32;
                     last_data = Some(data.clone());
                     let _ = claude_tx.send(data).await;
+                    last_fetch = Instant::now();
                 }
                 None => {
                     if let Some(ref cached) = last_data {
@@ -312,7 +333,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     }
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(poll_every) => {},
+                _ = claude_notify.notified() => {},
+            }
         }
     });
 
@@ -326,10 +350,14 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     let (codex_box, update_codex) = build_codex_section();
     let (codex_tx, codex_rx) = async_channel::unbounded::<codex::CodexData>();
 
+    let codex_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
+
+    let codex_notify = codex_refresh.clone();
     rt.spawn(async move {
         let mut prev_primary: u32 = 0;
         let mut prev_secondary: u32 = 0;
         let mut last_data: Option<codex::CodexData> = None;
+        let poll_every = Duration::from_secs(60);
         loop {
             let result = tokio::task::spawn_blocking(codex::fetch).await.unwrap_or_default();
             match result {
@@ -361,7 +389,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     }
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(poll_every) => {},
+                _ = codex_notify.notified() => {},
+            }
         }
     });
 
@@ -400,13 +431,29 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
 
     let win = window.clone();
     let ipc_recv = ipc_rx.clone();
+    let claude_wakeup = claude_refresh.clone();
+    let codex_wakeup = codex_refresh.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
         if let Ok(cmd) = ipc_recv.lock().unwrap().try_recv() {
             match cmd {
-                ipc::Command::Show   => win.present(),
+                ipc::Command::Show   => {
+                    win.present();
+                    claude_wakeup.notify_one();
+                    codex_wakeup.notify_one();
+                }
                 ipc::Command::Hide   => win.hide(),
                 ipc::Command::Toggle => {
-                    if win.is_visible() { win.hide(); } else { win.present(); }
+                    if win.is_visible() {
+                        win.hide();
+                    } else {
+                        win.present();
+                        claude_wakeup.notify_one();
+                        codex_wakeup.notify_one();
+                    }
+                }
+                ipc::Command::Refresh => {
+                    claude_wakeup.notify_one();
+                    codex_wakeup.notify_one();
                 }
                 ipc::Command::Quit   => win.close(),
             }
@@ -414,11 +461,18 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         glib::ControlFlow::Continue
     });
 
+    let claude_on_show = claude_refresh.clone();
+    let codex_on_show = codex_refresh.clone();
+    window.connect_show(move |_| {
+        claude_on_show.notify_one();
+        codex_on_show.notify_one();
+    });
+
     window.present();
 }
 
 fn main() {
-    // Client mode: status-overlay <show|hide|toggle|quit>
+    // Client mode: status-overlay <show|hide|toggle|refresh|quit>
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         match ipc::send(&args[1]) {

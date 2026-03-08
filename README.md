@@ -42,6 +42,7 @@ Once the daemon is running, control it from any terminal or keybind:
 status-overlay toggle   # show if hidden, hide if visible
 status-overlay show     # bring to foreground
 status-overlay hide     # send to background
+status-overlay refresh  # ask both usage sections to refresh now
 status-overlay quit     # kill the daemon
 ```
 
@@ -76,7 +77,10 @@ layerrule = [
 
 ## 🤖 Claude + Codex usage
 
-Both sections refresh every 60 seconds. Desktop notifications fire via `notify-send` when:
+- **Claude:** polls every 5 minutes but also refreshes whenever the window is shown or a `refresh`/`show`/`toggle` IPC arrives, with a minimum 30-second gap between fetches.
+- **Codex:** polls every 60 seconds and also refreshes on `refresh`/`show`/`toggle`.
+
+Desktop notifications fire via `notify-send` when:
 
 | Event | Threshold |
 |-------|-----------|
