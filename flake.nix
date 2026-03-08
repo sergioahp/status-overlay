@@ -43,6 +43,15 @@
         devShells.default = pkgs.mkShell {
           inputsFrom = [ status-overlay ];
           packages = [ toolchain pkgs.rust-analyzer ];
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+            pkgs.gtk4
+            pkgs.gtk4-layer-shell
+            pkgs.glib
+            pkgs.cairo
+            pkgs.pango
+            pkgs.gdk-pixbuf
+            pkgs.graphene
+          ];
         };
       });
 }
