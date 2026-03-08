@@ -8,74 +8,18 @@ use chrono::Local;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use std::time::{Duration, Instant};
+use std::fs;
 
-const CSS: &str = "
-window {
-    background: rgba(40, 21, 63, 0.45); /* #28153f with translucency */
-    border-radius: 16px;
+const EMBEDDED_CSS: &str = include_str!("style.css");
+
+fn load_css() -> String {
+    if let Ok(path) = std::env::var("STATUS_OVERLAY_CSS") {
+        if let Ok(data) = fs::read_to_string(&path) {
+            return data;
+        }
+    }
+    EMBEDDED_CSS.to_string()
 }
-#time {
-    font-size: 48px;
-    font-weight: bold;
-    color: white;
-}
-#date {
-    font-size: 16px;
-    color: rgba(255, 255, 255, 0.85);
-    margin-bottom: 12px;
-}
-#usage-section {
-    background: rgba(218, 119, 86, 0.7);
-    border-radius: 10px;
-    padding: 8px;
-    margin-top: 8px;
-}
-#section-label {
-    font-size: 11px;
-    font-weight: bold;
-    color: rgba(255, 255, 255, 0.6);
-    letter-spacing: 1px;
-    margin-bottom: 2px;
-}
-#usage-row {
-    font-size: 13px;
-    color: white;
-    margin-bottom: 2px;
-}
-#today-label {
-    font-size: 13px;
-    color: rgba(255, 255, 255, 0.9);
-    margin-top: 4px;
-}
-progressbar trough {
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 4px;
-    min-height: 8px;
-}
-progressbar progress {
-    background: rgba(255, 255, 255, 0.75);
-    border-radius: 4px;
-}
-#codex-section {
-    background: rgba(12, 46, 92, 0.8); /* dark blue */
-    border-radius: 10px;
-    padding: 8px;
-    margin-top: 8px;
-}
-calendar {
-    background: transparent;
-    color: white;
-    border: none;
-    margin-top: 12px;
-}
-calendar header {
-    color: white;
-}
-calendar:selected {
-    background: rgba(255, 255, 255, 0.3);
-    border-radius: 4px;
-}
-";
 
 fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -250,7 +194,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     window.set_margin(Edge::Right, side_margin);
 
     let css = gtk::CssProvider::new();
-    css.load_from_data(CSS);
+    css.load_from_data(&load_css());
     gtk::style_context_add_provider_for_display(
         &gtk::prelude::WidgetExt::display(&window),
         &css,

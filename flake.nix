@@ -27,7 +27,7 @@
         ];
 
         commonArgs = {
-          src = craneLib.cleanCargoSource ./.;
+          src = ./.;
           buildInputs = [ pkgs.gtk4 pkgs.gtk4-layer-shell ];
           nativeBuildInputs = [ pkgs.pkg-config pkgs.wrapGAppsHook4 ];
         };
@@ -38,7 +38,9 @@
           inherit cargoArtifacts;
           postInstall = ''
             wrapProgram $out/bin/status-overlay \
-              --prefix LD_LIBRARY_PATH : ${runtimeLibs}
+              --prefix LD_LIBRARY_PATH : ${runtimeLibs} \
+              --set STATUS_OVERLAY_CSS $out/share/status-overlay/style.css
+            install -Dm644 src/style.css $out/share/status-overlay/style.css
           '';
         });
       in
