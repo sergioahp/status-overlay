@@ -144,7 +144,12 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
             d.today_messages, d.today_tool_calls
         ));
 
-        if !d.stale {
+        if d.stale {
+            updated_lbl.set_text(&format!(
+                "Attempted update at {} (failed; cached values)",
+                Local::now().format("%H:%M:%S")
+            ));
+        } else {
             updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
         }
     };
@@ -202,7 +207,12 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
         ));
         secondary_bar.set_fraction((d.secondary_pct as f64 / 100.0).clamp(0.0, 1.0));
 
-        if !d.stale {
+        if d.stale {
+            codex_updated_lbl.set_text(&format!(
+                "Attempted update at {} (failed; cached values)",
+                Local::now().format("%H:%M:%S")
+            ));
+        } else {
             codex_updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
         }
     };
