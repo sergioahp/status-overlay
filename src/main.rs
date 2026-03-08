@@ -4,8 +4,8 @@ use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
 const CSS: &str = "
 window {
-    background: rgba(20, 20, 30, 0.85);
-    border-radius: 12px;
+    background: rgba(247, 118, 142, 0.45);
+    border-radius: 16px;
 }
 #time {
     font-size: 48px;
@@ -14,7 +14,7 @@ window {
 }
 #date {
     font-size: 16px;
-    color: rgba(255, 255, 255, 0.7);
+    color: rgba(255, 255, 255, 0.85);
     margin-bottom: 8px;
 }
 calendar {
@@ -26,7 +26,7 @@ calendar header {
     color: white;
 }
 calendar:selected {
-    background: rgba(100, 150, 255, 0.6);
+    background: rgba(255, 255, 255, 0.3);
     border-radius: 4px;
 }
 ";
@@ -38,15 +38,27 @@ fn activate(app: &gtk::Application) {
     window.set_layer(Layer::Overlay);
 
     let anchors = [
-        (Edge::Left, false),
-        (Edge::Right, false),
-        (Edge::Top, true),
+        (Edge::Left, true),
+        (Edge::Right, true),
+        (Edge::Top, false),
         (Edge::Bottom, false),
     ];
     for (edge, state) in anchors {
         window.set_anchor(edge, state);
     }
-    window.set_margin(Edge::Top, 16);
+
+    // 80% width: leave 10% margin on each side
+    let monitor_width = gtk::prelude::WidgetExt::display(&window)
+        .monitors()
+        .into_iter()
+        .next()
+        .and_then(|obj| obj.ok())
+        .and_then(|obj: glib::Object| obj.downcast::<gtk::gdk::Monitor>().ok())
+        .map(|m| m.geometry().width())
+        .unwrap_or(1920);
+    let side_margin = monitor_width / 10;
+    window.set_margin(Edge::Left, side_margin);
+    window.set_margin(Edge::Right, side_margin);
 
     let css = gtk::CssProvider::new();
     css.load_from_data(CSS);
