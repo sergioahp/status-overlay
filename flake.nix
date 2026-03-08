@@ -16,6 +16,16 @@
         toolchain = fenix.packages.${system}.stable.toolchain;
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
 
+        runtimeLibs = pkgs.lib.makeLibraryPath [
+          pkgs.gtk4
+          pkgs.gtk4-layer-shell
+          pkgs.glib
+          pkgs.cairo
+          pkgs.pango
+          pkgs.gdk-pixbuf
+          pkgs.graphene
+        ];
+
         commonArgs = {
           src = craneLib.cleanCargoSource ./.;
           buildInputs = [ pkgs.gtk4 pkgs.gtk4-layer-shell ];
@@ -26,6 +36,10 @@
 
         status-overlay = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
+          postInstall = ''
+            wrapProgram $out/bin/status-overlay \
+              --prefix LD_LIBRARY_PATH : ${runtimeLibs}
+          '';
         });
       in
       {
