@@ -1,5 +1,7 @@
 # 🟠 status-overlay
 
+> IPC daemon pattern inspired by [hyprvoice](https://github.com/leonardotrapani/hyprvoice) by Leonardo Trapani.
+
 A floating Wayland overlay built in Rust with GTK4 and layer-shell. Shows the time, date, calendar, and live Claude AI usage stats — all in a blurred, translucent panel that floats above everything without stealing focus.
 
 ## ✨ Features
@@ -10,7 +12,7 @@ A floating Wayland overlay built in Rust with GTK4 and layer-shell. Shows the ti
 - **📊 Today's stats** — message and tool-call counts from local Claude Code stats cache
 - **💳 Extra usage** — shows Extra tier spend vs. monthly limit
 - **🎨 Compositor blur** — Hyprland `layerrule` blur on the `status-overlay` namespace
-- **⌨️ Press `q` to dismiss**
+- **🔌 Unix socket IPC** — show, hide, toggle, quit from any script or keybind
 - **🦀 Pure Rust** — no eww, no scripts, direct GTK4
 
 ## 🛠️ Stack
@@ -24,22 +26,43 @@ A floating Wayland overlay built in Rust with GTK4 and layer-shell. Shows the ti
 ## 🚀 Usage
 
 ```bash
-# Run in dev shell
-nix develop --command cargo run
-
-# Build store binary (with wrapGAppsHook, works outside dev shell)
-nix build
-./result/bin/status-overlay
-
-# Or directly
+# Run daemon (window starts visible)
 nix run
+
+# Or in dev shell
+nix develop --command cargo run
 ```
 
-Press `q` to close the overlay.
+### IPC commands
 
-## 🔧 Hyprland blur setup
+Once the daemon is running, control it from any terminal or keybind:
+
+```bash
+status-overlay toggle   # show if hidden, hide if visible
+status-overlay show     # bring to foreground
+status-overlay hide     # send to background
+status-overlay quit     # kill the daemon
+```
+
+The socket lives at `$XDG_RUNTIME_DIR/status-overlay.sock`.
+
+Press `q` while the overlay has focus to hide it.
+
+## ⌨️ Hyprland integration
 
 Add to your Hyprland config (or home-manager):
+
+```nix
+# Start the daemon on login
+exec-once = [ "status-overlay" ];
+
+# Toggle with a keybind
+bind = [ "$mod, O, exec, status-overlay toggle" ];
+```
+
+## 🌫️ Blur setup
+
+Add to your Hyprland layerrule config:
 
 ```nix
 layerrule = [
@@ -47,6 +70,8 @@ layerrule = [
   "ignorealpha 0.1, status-overlay"
 ];
 ```
+
+`ignorealpha 0.1` prevents blurring fully transparent pixels, keeping the rounded corners clean.
 
 ## 🤖 Claude usage data
 
