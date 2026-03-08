@@ -19,7 +19,7 @@
         commonArgs = {
           src = craneLib.cleanCargoSource ./.;
           buildInputs = [ pkgs.gtk4 pkgs.gtk4-layer-shell ];
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.wrapGAppsHook4 ];
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
