@@ -93,6 +93,17 @@ fn activate(app: &gtk::Application) {
     vbox.append(&calendar);
 
     window.set_child(Some(&vbox));
+
+    let key_controller = gtk::EventControllerKey::new();
+    let win = window.clone();
+    key_controller.connect_key_pressed(move |_, key, _, _| {
+        if key == gtk::gdk::Key::q {
+            win.close();
+        }
+        glib::Propagation::Proceed
+    });
+    window.add_controller(key_controller);
+
     window.present();
 }
 
