@@ -468,7 +468,6 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
             match cmd {
                 ipc::Command::Show   => {
                     win.present();
-                    claude_wakeup.notify_one();
                     codex_wakeup.notify_one();
                 }
                 ipc::Command::Hide   => win.hide(),
@@ -477,7 +476,6 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         win.hide();
                     } else {
                         win.present();
-                        claude_wakeup.notify_one();
                         codex_wakeup.notify_one();
                     }
                 }
