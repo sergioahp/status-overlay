@@ -118,6 +118,7 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
 
     let plot = gtk::Picture::new();
     plot.set_hexpand(true);
+    plot.set_size_request(320, 90);
 
     vbox.append(&section_lbl);
     vbox.append(&session_lbl);
@@ -190,6 +191,7 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
 
     let plot = gtk::Picture::new();
     plot.set_hexpand(true);
+    plot.set_size_request(320, 90);
 
     vbox.append(&section_lbl);
     vbox.append(&primary_lbl);
@@ -409,6 +411,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     if let Some(mut cached) = storage::load_usage() {
         cached.stale = true;
         update_usage(&cached);
+        storage::append_usage_sample(&cached);
     }
 
     // --- Claude usage task ---
@@ -490,6 +493,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     if let Some(mut cached) = storage::load_codex() {
         cached.stale = true;
         update_codex(&cached);
+        storage::append_codex_sample(&cached);
     }
 
     let codex_notify = codex_refresh.clone();
