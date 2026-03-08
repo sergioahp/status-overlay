@@ -245,6 +245,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         let mut prev_session: u32 = 0;
         let mut prev_weekly: u32 = 0;
         let mut last_data: Option<usage::UsageData> = None;
+        let mut claude_recover_notice_sent = false;
         let poll_every = Duration::from_secs(300);
         let min_gap   = Duration::from_secs(30);
         let mut last_fetch = Instant::now() - poll_every; // ensure first fetch is immediate
@@ -278,6 +279,16 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                             notify::Transition::Depleted => notify::send("Claude weekly depleted", "7-day quota reached"),
                             notify::Transition::Restored => notify::send("Claude weekly restored", "Weekly quota available again"),
                         }
+                    }
+                    let depleted = data.session_pct >= 100.0 && data.weekly_pct >= 100.0;
+                    let avail_secs = data.session_resets_secs.max(data.weekly_resets_secs);
+                    if depleted {
+                        if avail_secs > 0 && avail_secs <= 3600 && !claude_recover_notice_sent {
+                            notify::send("Claude back soon", "Quota should reopen in ~1 hour");
+                            claude_recover_notice_sent = true;
+                        }
+                    } else {
+                        claude_recover_notice_sent = false;
                     }
                     prev_session = data.session_pct.round() as u32;
                     prev_weekly  = data.weekly_pct.round() as u32;
@@ -321,6 +332,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         let mut prev_primary: u32 = 0;
         let mut prev_secondary: u32 = 0;
         let mut last_data: Option<codex::CodexData> = None;
+        let mut codex_recover_notice_sent = false;
         let poll_every = Duration::from_secs(60);
         loop {
             let result = tokio::task::spawn_blocking(codex::fetch).await.unwrap_or_default();
@@ -339,6 +351,16 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                             notify::Transition::Depleted => notify::send("Codex weekly depleted", "Weekly quota reached"),
                             notify::Transition::Restored => notify::send("Codex weekly restored", "Weekly quota available again"),
                         }
+                    }
+                    let depleted = data.primary_pct >= 100 && data.secondary_pct >= 100;
+                    let avail_secs = data.primary_resets_secs.max(data.secondary_resets_secs);
+                    if depleted {
+                        if avail_secs > 0 && avail_secs <= 3600 && !codex_recover_notice_sent {
+                            notify::send("Codex back soon", "Quota should reopen in ~1 hour");
+                            codex_recover_notice_sent = true;
+                        }
+                    } else {
+                        codex_recover_notice_sent = false;
                     }
                     prev_primary   = data.primary_pct;
                     prev_secondary = data.secondary_pct;

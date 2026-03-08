@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{Local, DateTime, FixedOffset, Utc};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 
@@ -6,8 +6,10 @@ use std::{fs, path::PathBuf};
 pub struct UsageData {
     pub session_pct: f64,
     pub session_resets: String,
+    pub session_resets_secs: u64,
     pub weekly_pct: f64,
     pub weekly_resets: String,
+    pub weekly_resets_secs: u64,
     pub extra_used_cents: f64,
     pub extra_limit_cents: f64,
     pub today_messages: u64,
@@ -66,6 +68,15 @@ fn fmt_reset(iso: &str) -> String {
         .unwrap_or_default()
 }
 
+fn secs_until(iso: &str) -> u64 {
+    DateTime::parse_from_rfc3339(iso)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+        .and_then(|dt| (dt - Utc::now()).to_std().ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 fn read_today_stats() -> (u64, u64) {
     let data = match fs::read_to_string(claude_dir().join("stats-cache.json")) {
         Ok(d) => d,
@@ -118,6 +129,12 @@ pub fn fetch() -> Option<UsageData> {
 
     Some(UsageData {
         session_pct: resp.five_hour.as_ref().and_then(|w| w.utilization).unwrap_or(0.0),
+        session_resets_secs: resp
+            .five_hour
+            .as_ref()
+            .and_then(|w| w.resets_at.as_deref())
+            .map(secs_until)
+            .unwrap_or(0),
         session_resets: resp
             .five_hour
             .as_ref()
@@ -125,6 +142,12 @@ pub fn fetch() -> Option<UsageData> {
             .map(fmt_reset)
             .unwrap_or_default(),
         weekly_pct: resp.seven_day.as_ref().and_then(|w| w.utilization).unwrap_or(0.0),
+        weekly_resets_secs: resp
+            .seven_day
+            .as_ref()
+            .and_then(|w| w.resets_at.as_deref())
+            .map(secs_until)
+            .unwrap_or(0),
         weekly_resets: resp
             .seven_day
             .as_ref()
