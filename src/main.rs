@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 const CSS: &str = "
 window {
-    background: rgba(247, 118, 142, 0.45);
+    background: rgba(40, 21, 63, 0.45); /* #28153f with translucency */
     border-radius: 16px;
 }
 #time {
@@ -57,7 +57,7 @@ progressbar progress {
     border-radius: 4px;
 }
 #codex-section {
-    background: rgba(16, 163, 127, 0.7);
+    background: rgba(12, 46, 92, 0.8); /* dark blue */
     border-radius: 10px;
     padding: 8px;
     margin-top: 8px;
