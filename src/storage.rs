@@ -1,8 +1,6 @@
-use serde::{de::DeserializeOwned, Serialize};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use chrono::Utc;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{fs, path::PathBuf};
 
 fn state_dir() -> PathBuf {
     std::env::var("XDG_STATE_HOME")
@@ -46,4 +44,55 @@ pub fn save_codex(data: &crate::codex::CodexData) {
 
 pub fn load_codex() -> Option<crate::codex::CodexData> {
     load_json("codex.json")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UsageSample {
+    pub ts: i64,
+    pub session_pct: f64,
+    pub weekly_pct: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CodexSample {
+    pub ts: i64,
+    pub primary_pct: u32,
+    pub secondary_pct: u32,
+}
+
+fn trim_vec<T>(v: &mut Vec<T>, cap: usize) {
+    if v.len() > cap {
+        let drop = v.len() - cap;
+        v.drain(0..drop);
+    }
+}
+
+pub fn append_usage_sample(data: &crate::usage::UsageData) {
+    let mut hist: Vec<UsageSample> = load_json("usage_history.json").unwrap_or_default();
+    hist.push(UsageSample {
+        ts: Utc::now().timestamp(),
+        session_pct: data.session_pct,
+        weekly_pct: data.weekly_pct,
+    });
+    trim_vec(&mut hist, 500);
+    let _ = save_json("usage_history.json", &hist);
+}
+
+pub fn load_usage_history() -> Vec<UsageSample> {
+    load_json("usage_history.json").unwrap_or_default()
+}
+
+pub fn append_codex_sample(data: &crate::codex::CodexData) {
+    let mut hist: Vec<CodexSample> = load_json("codex_history.json").unwrap_or_default();
+    hist.push(CodexSample {
+        ts: Utc::now().timestamp(),
+        primary_pct: data.primary_pct,
+        secondary_pct: data.secondary_pct,
+    });
+    trim_vec(&mut hist, 500);
+    let _ = save_json("codex_history.json", &hist);
+}
+
+pub fn load_codex_history() -> Vec<CodexSample> {
+    load_json("codex_history.json").unwrap_or_default()
 }

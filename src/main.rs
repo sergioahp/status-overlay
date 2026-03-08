@@ -6,8 +6,11 @@ mod storage;
 
 use chrono::Local;
 use gtk::prelude::*;
+use gtk::gdk;
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use std::time::{Duration, Instant};
+
+use plotters::prelude::*;
 
 const CSS: &str = "
 window {
@@ -113,6 +116,9 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     updated_lbl.set_widget_name("today-label");
     updated_lbl.set_halign(gtk::Align::Start);
 
+    let plot = gtk::Picture::new();
+    plot.set_hexpand(true);
+
     vbox.append(&section_lbl);
     vbox.append(&session_lbl);
     vbox.append(&session_bar);
@@ -121,6 +127,7 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     vbox.append(&extra_lbl);
     vbox.append(&today_lbl);
     vbox.append(&updated_lbl);
+    vbox.append(&plot);
 
     let update = move |d: &usage::UsageData| {
         section_lbl.set_text(if d.stale { "CLAUDE USAGE (stale)" } else { "CLAUDE USAGE" });
@@ -146,6 +153,10 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
 
         if !d.stale {
             updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
+        }
+
+        if let Some(tex) = draw_usage_plot(&storage::load_usage_history()) {
+            plot.set_paintable(Some(&tex));
         }
     };
 
@@ -177,12 +188,16 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
     codex_updated_lbl.set_widget_name("today-label");
     codex_updated_lbl.set_halign(gtk::Align::Start);
 
+    let plot = gtk::Picture::new();
+    plot.set_hexpand(true);
+
     vbox.append(&section_lbl);
     vbox.append(&primary_lbl);
     vbox.append(&primary_bar);
     vbox.append(&secondary_lbl);
     vbox.append(&secondary_bar);
     vbox.append(&codex_updated_lbl);
+    vbox.append(&plot);
 
     let update = move |d: &codex::CodexData| {
         section_lbl.set_text(if d.stale { "CODEX USAGE (stale)" } else { "CODEX USAGE" });
@@ -205,9 +220,121 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
         if !d.stale {
             codex_updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
         }
+
+        if let Some(tex) = draw_codex_plot(&storage::load_codex_history()) {
+            plot.set_paintable(Some(&tex));
+        }
     };
 
     (vbox, update)
+}
+
+fn svg_to_texture(svg: &str) -> Option<gdk::Texture> {
+    let loader = gdk_pixbuf::PixbufLoader::new();
+    loader.write(svg.as_bytes()).ok()?;
+    loader.close().ok()?;
+    let pixbuf = loader.pixbuf()?;
+    Some(gdk::Texture::for_pixbuf(&pixbuf))
+}
+
+fn draw_usage_plot(samples: &[storage::UsageSample]) -> Option<gdk::Texture> {
+    if samples.len() < 2 {
+        return None;
+    }
+    let w = 320;
+    let h = 90;
+    let mut svg = String::new();
+    {
+        let root = plotters_svg::SVGBackend::with_string(&mut svg, (w, h)).into_drawing_area();
+        root.fill(&WHITE).ok()?;
+        let max_y = samples
+            .iter()
+            .map(|s| s.session_pct.max(s.weekly_pct))
+            .fold(0.0_f64, f64::max)
+            .max(100.0);
+        let (min_x, max_x) = (
+            samples.first()?.ts,
+            samples.last()?.ts.max(samples.first()?.ts + 1),
+        );
+        let mut chart = ChartBuilder::on(&root)
+            .margin(5)
+            .set_left_and_bottom_label_area_size(24)
+            .build_cartesian_2d(min_x..max_x, 0.0..max_y)
+            .ok()?;
+        chart
+            .configure_mesh()
+            .disable_x_mesh()
+            .y_desc("% used")
+            .x_labels(3)
+            .y_labels(5)
+            .label_style(("Inter", 10))
+            .draw()
+            .ok()?;
+        chart
+            .draw_series(LineSeries::new(
+                samples.iter().map(|s| (s.ts, s.session_pct)),
+                &RED.mix(0.8),
+            ))
+            .ok()?;
+        chart
+            .draw_series(LineSeries::new(
+                samples.iter().map(|s| (s.ts, s.weekly_pct)),
+                &BLUE.mix(0.8),
+            ))
+            .ok()?;
+        root.present().ok()?;
+    }
+    svg_to_texture(&svg)
+}
+
+fn draw_codex_plot(samples: &[storage::CodexSample]) -> Option<gdk::Texture> {
+    if samples.len() < 2 {
+        return None;
+    }
+    let w = 320;
+    let h = 90;
+    let mut svg = String::new();
+    {
+        let root = plotters_svg::SVGBackend::with_string(&mut svg, (w, h)).into_drawing_area();
+        root.fill(&WHITE).ok()?;
+        let max_y = samples
+            .iter()
+            .map(|s| s.primary_pct.max(s.secondary_pct) as f64)
+            .fold(0.0_f64, f64::max)
+            .max(100.0);
+        let (min_x, max_x) = (
+            samples.first()?.ts,
+            samples.last()?.ts.max(samples.first()?.ts + 1),
+        );
+        let mut chart = ChartBuilder::on(&root)
+            .margin(5)
+            .set_left_and_bottom_label_area_size(24)
+            .build_cartesian_2d(min_x..max_x, 0.0..max_y)
+            .ok()?;
+        chart
+            .configure_mesh()
+            .disable_x_mesh()
+            .y_desc("% used")
+            .x_labels(3)
+            .y_labels(5)
+            .label_style(("Inter", 10))
+            .draw()
+            .ok()?;
+        chart
+            .draw_series(LineSeries::new(
+                samples.iter().map(|s| (s.ts, s.primary_pct as f64)),
+                &GREEN.mix(0.8),
+            ))
+            .ok()?;
+        chart
+            .draw_series(LineSeries::new(
+                samples.iter().map(|s| (s.ts, s.secondary_pct as f64)),
+                &BLACK.mix(0.7),
+            ))
+            .ok()?;
+        root.present().ok()?;
+    }
+    svg_to_texture(&svg)
 }
 
 fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
@@ -329,6 +456,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     prev_weekly  = data.weekly_pct.round() as u32;
                     last_data = Some(data.clone());
                     storage::save_usage(&data);
+                    storage::append_usage_sample(&data);
                     let _ = claude_tx.send(data).await;
                     last_fetch = Instant::now();
                 }
@@ -392,6 +520,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     prev_secondary = data.secondary_pct;
                     last_data = Some(data.clone());
                     storage::save_codex(&data);
+                    storage::append_codex_sample(&data);
                     let _ = codex_tx.send(data).await;
                 }
                 None => {
