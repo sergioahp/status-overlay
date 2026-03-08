@@ -2,6 +2,7 @@ mod codex;
 mod ipc;
 mod notify;
 mod usage;
+mod storage;
 
 use chrono::Local;
 use gtk::prelude::*;
@@ -276,6 +277,11 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     // Usage section
     let (usage_box, update_usage) = build_usage_section();
 
+    if let Some(mut cached) = storage::load_usage() {
+        cached.stale = true;
+        update_usage(&cached);
+    }
+
     let claude_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
 
     // --- Claude usage task ---
@@ -322,6 +328,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     prev_session = data.session_pct.round() as u32;
                     prev_weekly  = data.weekly_pct.round() as u32;
                     last_data = Some(data.clone());
+                    storage::save_usage(&data);
                     let _ = claude_tx.send(data).await;
                     last_fetch = Instant::now();
                 }
@@ -348,6 +355,11 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
 
     // --- Codex usage section ---
     let (codex_box, update_codex) = build_codex_section();
+
+    if let Some(mut cached) = storage::load_codex() {
+        cached.stale = true;
+        update_codex(&cached);
+    }
     let (codex_tx, codex_rx) = async_channel::unbounded::<codex::CodexData>();
 
     let codex_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -379,6 +391,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     prev_primary   = data.primary_pct;
                     prev_secondary = data.secondary_pct;
                     last_data = Some(data.clone());
+                    storage::save_codex(&data);
                     let _ = codex_tx.send(data).await;
                 }
                 None => {
@@ -472,14 +485,22 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
 }
 
 fn main() {
-    // Client mode: status-overlay <show|hide|toggle|refresh|quit>
+    // Client mode: status-overlay <show|hide|toggle|refresh|quit|--help|-h>
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
-        match ipc::send(&args[1]) {
-            Ok(resp) => println!("{resp}"),
-            Err(e)   => eprintln!("error: {e} (is the daemon running?)"),
+        match args[1].as_str() {
+            "--help" | "-h" => {
+                println!("Usage: status-overlay <command>\nCommands: show | hide | toggle | refresh | quit");
+                return;
+            }
+            other => {
+                match ipc::send(other) {
+                    Ok(resp) => println!("{resp}"),
+                    Err(e)   => eprintln!("error: {e} (is the daemon running?)"),
+                }
+                return;
+            }
         }
-        return;
     }
 
     // Daemon mode
