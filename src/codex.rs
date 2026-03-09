@@ -69,15 +69,16 @@ pub fn fmt_resets(secs: u64) -> String {
     if secs == 0 {
         return String::new();
     }
-    let now = Local::now();
-    let target = now + Duration::seconds(secs as i64);
-    let today = now.date_naive();
-    let tomorrow = (now + Duration::days(1)).date_naive();
-    if target.date_naive() == today {
-        let h = secs / 3600;
-        let m = (secs % 3600) / 60;
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    // For windows ≤6h always use relative — date formats are confusing when
+    // the reset is only a few hours away.
+    if secs <= 6 * 3600 {
         return format!("resets in {h}h {m}m");
     }
+    let now = Local::now();
+    let target = now + Duration::seconds(secs as i64);
+    let tomorrow = (now + Duration::days(1)).date_naive();
     if target.date_naive() == tomorrow {
         return format!("resets tomorrow {}", target.format("%-I:%M %p"));
     }
