@@ -46,11 +46,11 @@ impl Clock {
         let last_minute: Rc<Cell<i64>> = Rc::new(Cell::new(0));
         // Generation counter: incremented on every 200ms tick so that each tick
         // supersedes the previous one-shot. Old one-shots still fire (glib
-        // timeouts can't be cancelled cheaply) but check the generation and
+        // timeouts can't be cancelled cheaply) but check the this_generation and
         // no-op if they're stale. This means the LAST 200ms tick before each
         // second boundary is the one that actually fires — giving the most
         // accurate estimate of ms_until at the cost of a few extra no-op firings.
-        let generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
+        let this_generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
 
         // Fire immediately so the UI is populated before the first boundary tick.
         let now = Local::now();
@@ -62,19 +62,19 @@ impl Clock {
             let now = Local::now();
             let ms_until = 1000 - now.timestamp_subsec_millis() as u64;
 
-            // Each 200ms tick gets a new generation, superseding the previous
+            // Each 200ms tick gets a new this_generation, superseding the previous
             // one-shot. The old one-shot will fire but do nothing.
-            let gen = generation.get().wrapping_add(1);
-            generation.set(gen);
+            let this_gen = this_generation.get().wrapping_add(1);
+            this_generation.set(this_gen);
 
             let subs = second_subs.clone();
             let min_subs = minute_subs.clone();
             let last_min = last_minute.clone();
-            let gen_check = generation.clone();
+            let this_gen_check = this_generation.clone();
 
             glib::timeout_add_local(std::time::Duration::from_millis(ms_until), move || {
                 // Only the most-recently-scheduled one-shot fires.
-                if gen_check.get() == gen {
+                if this_gen_check.get() == this_gen {
                     let fire_time = Local::now();
                     for cb in subs.iter() {
                         cb(fire_time);
