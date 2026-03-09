@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
-use chrono::{Local, TimeZone};
+use chrono::{Local, Duration};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CodexData {
@@ -64,11 +64,17 @@ pub fn fmt_resets(secs: u64) -> String {
     if secs == 0 {
         return String::new();
     }
-    let now = Local::now();
-    let reset_time = now + chrono::Duration::seconds(secs as i64);
-    let day = reset_time.format("%a").to_string();
-    let time = reset_time.format("%-I:%M %p").to_string();
-    format!("resets {day} {time}")
+    let dur = Duration::seconds(secs as i64);
+    if dur < Duration::hours(24) {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        return format!("resets in {h}h {m}m");
+    }
+    let target = Local::now() + dur;
+    if dur < Duration::hours(48) {
+        return format!("resets tomorrow {}", target.format("%-I:%M %p"));
+    }
+    format!("resets {}", target.format("%a %-I:%M %p"))
 }
 
 /// Returns `None` when the API call fails. Returns `Some(default)` when no token is configured.

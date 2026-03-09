@@ -60,17 +60,21 @@ fn read_access_token() -> Option<String> {
 }
 
 // "2026-03-08T17:00:00.198664+00:00" → "17:00Z"
-fn fmt_reset(iso: &str) -> String {
-    DateTime::parse_from_rfc3339(iso)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-        .map(|dt| {
-            let local = dt.with_timezone(&Local);
-            let day = local.format("%a").to_string();
-            let time = local.format("%-I:%M %p").to_string();
-            format!("{day} {time}")
-        })
-        .unwrap_or_else(|| iso.to_string())
+fn human_reset(secs: u64) -> String {
+    if secs == 0 {
+        return String::new();
+    }
+    let dur = Duration::seconds(secs as i64);
+    if dur < Duration::hours(24) {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        return format!("resets in {h}h {m}m");
+    }
+    let target = Local::now() + dur;
+    if dur < Duration::hours(48) {
+        return format!("resets tomorrow {}", target.format("%-I:%M %p"));
+    }
+    format!("resets {}", target.format("%a %-I:%M %p"))
 }
 
 fn secs_until(iso: &str) -> u64 {
@@ -121,44 +125,60 @@ pub fn fetch() -> Option<UsageData> {
         }
     };
 
-    let body = ureq::get("https://api.anthropic.com/api/oauth/usage")
+    let response = match ureq::get("https://api.anthropic.com/api/oauth/usage")
         .set("Authorization", &format!("Bearer {token}"))
         .set("anthropic-beta", "oauth-2025-04-20")
         .set("Accept", "application/json")
         .call()
-        .ok()?
-        .into_string()
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            eprintln!("[claude] HTTP {code}: {body}");
+            return None;
+        }
+        Err(e) => {
+            eprintln!("[claude] request error: {e}");
+            return None;
+        }
+    };
 
-    let resp: OAuthUsageResponse = serde_json::from_str(&body).ok()?;
+    let body = match response.into_string() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[claude] read error: {e}");
+            return None;
+        }
+    };
+
+    let resp: OAuthUsageResponse = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[claude] parse error: {e}\nbody: {body}");
+            return None;
+        }
+    };
+
+    let session_resets_secs = resp
+        .five_hour
+        .as_ref()
+        .and_then(|w| w.resets_at.as_deref())
+        .map(secs_until)
+        .unwrap_or(0);
+    let weekly_resets_secs = resp
+        .seven_day
+        .as_ref()
+        .and_then(|w| w.resets_at.as_deref())
+        .map(secs_until)
+        .unwrap_or(0);
 
     Some(UsageData {
         session_pct: resp.five_hour.as_ref().and_then(|w| w.utilization).unwrap_or(0.0),
-        session_resets_secs: resp
-            .five_hour
-            .as_ref()
-            .and_then(|w| w.resets_at.as_deref())
-            .map(secs_until)
-            .unwrap_or(0),
-        session_resets: resp
-            .five_hour
-            .as_ref()
-            .and_then(|w| w.resets_at.as_deref())
-            .map(fmt_reset)
-            .unwrap_or_default(),
+        session_resets_secs,
+        session_resets: human_reset(session_resets_secs),
         weekly_pct: resp.seven_day.as_ref().and_then(|w| w.utilization).unwrap_or(0.0),
-        weekly_resets_secs: resp
-            .seven_day
-            .as_ref()
-            .and_then(|w| w.resets_at.as_deref())
-            .map(secs_until)
-            .unwrap_or(0),
-        weekly_resets: resp
-            .seven_day
-            .as_ref()
-            .and_then(|w| w.resets_at.as_deref())
-            .map(fmt_reset)
-            .unwrap_or_default(),
+        weekly_resets_secs,
+        weekly_resets: human_reset(weekly_resets_secs),
         extra_used_cents: resp.extra_usage.as_ref().and_then(|e| e.used_credits).unwrap_or(0.0),
         extra_limit_cents: resp.extra_usage.as_ref().and_then(|e| e.monthly_limit).unwrap_or(0.0),
         today_messages,
