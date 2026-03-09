@@ -64,14 +64,16 @@ fn human_reset(secs: u64) -> String {
     if secs == 0 {
         return String::new();
     }
-    let dur = Duration::seconds(secs as i64);
-    if dur < Duration::hours(24) {
+    let now = Local::now();
+    let target = now + Duration::seconds(secs as i64);
+    let today = now.date_naive();
+    let tomorrow = (now + Duration::days(1)).date_naive();
+    if target.date_naive() == today {
         let h = secs / 3600;
         let m = (secs % 3600) / 60;
         return format!("resets in {h}h {m}m");
     }
-    let target = Local::now() + dur;
-    if dur < Duration::hours(48) {
+    if target.date_naive() == tomorrow {
         return format!("resets tomorrow {}", target.format("%-I:%M %p"));
     }
     format!("resets {}", target.format("%a %-I:%M %p"))
