@@ -1,14 +1,49 @@
+mod clock;
 mod codex;
 mod ipc;
 mod notify;
 mod usage;
 mod storage;
 
-use chrono::{Local, TimeZone};
+use chrono::{DateTime, Local, TimeZone};
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use std::time::{Duration, Instant};
 use std::fs;
+
+/// Format a unix timestamp as a human-readable "X ago" string relative to `now`.
+fn fmt_ago(ts: i64, now: DateTime<Local>) -> String {
+    if ts == 0 {
+        return "--".to_string();
+    }
+    let dt = match Local.timestamp_opt(ts, 0) {
+        chrono::LocalResult::Single(dt) => dt,
+        _ => return "--".to_string(),
+    };
+    let secs = (now - dt).num_seconds().max(0);
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        let m = secs / 60;
+        format!("{m} minute{} ago", if m == 1 { "" } else { "s" })
+    } else {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        format!("{h}h {m}m ago")
+    }
+}
+
+fn format_fetch_label(fetched_at: i64, attempted_at: i64, stale: bool, now: DateTime<Local>) -> String {
+    if stale {
+        format!(
+            "Using data from {} · last attempt {} (failed)",
+            fmt_ago(fetched_at, now),
+            fmt_ago(attempted_at, now),
+        )
+    } else {
+        format!("Updated {}", fmt_ago(fetched_at, now))
+    }
+}
 
 const EMBEDDED_CSS: &str = include_str!("style.css");
 
@@ -21,7 +56,7 @@ fn load_css() -> String {
     EMBEDDED_CSS.to_string()
 }
 
-fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
+fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData), impl Fn(DateTime<Local>)) {
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
     vbox.set_halign(gtk::Align::Fill);
     vbox.set_widget_name("usage-section");
@@ -66,13 +101,22 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
     vbox.append(&today_lbl);
     vbox.append(&updated_lbl);
 
+    // Shared last-data for the tick closure.
+    let last_data: std::rc::Rc<std::cell::RefCell<Option<usage::UsageData>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let last_data_t = last_data.clone();
+
+    // Label clones for the tick closure.
+    let session_lbl_t = session_lbl.clone();
+    let weekly_lbl_t = weekly_lbl.clone();
+    let updated_lbl_t = updated_lbl.clone();
+
     let update = move |d: &usage::UsageData| {
+        let now = Local::now();
+        *last_data.borrow_mut() = Some(d.clone());
+
         section_lbl.set_text(if d.stale { "CLAUDE USAGE (stale)" } else { "CLAUDE USAGE" });
-
-        session_lbl.set_text(&format!("5h session  {:.0}%  resets {}", d.session_pct, d.session_resets));
         session_bar.set_fraction((d.session_pct / 100.0).clamp(0.0, 1.0));
-
-        weekly_lbl.set_text(&format!("7d weekly   {:.0}%  resets {}", d.weekly_pct, d.weekly_resets));
         weekly_bar.set_fraction((d.weekly_pct / 100.0).clamp(0.0, 1.0));
 
         if d.extra_limit_cents > 0.0 {
@@ -82,47 +126,48 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
                 d.extra_limit_cents / 100.0,
             ));
         }
-
         today_lbl.set_text(&format!(
             "Today  {} msgs  ·  {} tool calls",
             d.today_messages, d.today_tool_calls
         ));
 
-        let fmt_ts = |ts: i64| -> String {
-            if ts == 0 {
-                return "--".to_string();
-            }
-            let dt = match Local.timestamp_opt(ts, 0) {
-                chrono::LocalResult::Single(dt) => dt,
-                _ => return "--".to_string(),
-            };
-            let secs = (Local::now() - dt).num_seconds().max(0);
-            if secs < 60 {
-                "less than a minute ago".to_string()
-            } else if secs < 3600 {
-                let m = secs / 60;
-                format!("{m} minute{} ago", if m == 1 { "" } else { "s" })
-            } else {
-                let h = secs / 3600;
-                let m = (secs % 3600) / 60;
-                format!("{h}h {m}m ago")
-            }
-        };
-        if d.stale {
-            updated_lbl.set_text(&format!(
-                "Using data from {} · last attempt {} (failed)",
-                fmt_ts(d.fetched_at),
-                fmt_ts(d.attempted_at)
-            ));
-        } else {
-            updated_lbl.set_text(&format!("Updated {}", fmt_ts(d.fetched_at)));
-        }
+        // Also update the time-sensitive labels immediately on new data.
+        let elapsed = (now.timestamp() - d.fetched_at).max(0) as u64;
+        session_lbl.set_text(&format!(
+            "5h session  {:.0}%  {}",
+            d.session_pct,
+            usage::human_reset(d.session_resets_secs.saturating_sub(elapsed)),
+        ));
+        weekly_lbl.set_text(&format!(
+            "7d weekly   {:.0}%  {}",
+            d.weekly_pct,
+            usage::human_reset(d.weekly_resets_secs.saturating_sub(elapsed)),
+        ));
+        updated_lbl.set_text(&format_fetch_label(d.fetched_at, d.attempted_at, d.stale, now));
     };
 
-    (vbox, update)
+    // Called every second by the Clock dispatcher to refresh time-relative text.
+    let tick = move |now: DateTime<Local>| {
+        let guard = last_data_t.borrow();
+        let Some(ref d) = *guard else { return };
+        let elapsed = (now.timestamp() - d.fetched_at).max(0) as u64;
+        session_lbl_t.set_text(&format!(
+            "5h session  {:.0}%  {}",
+            d.session_pct,
+            usage::human_reset(d.session_resets_secs.saturating_sub(elapsed)),
+        ));
+        weekly_lbl_t.set_text(&format!(
+            "7d weekly   {:.0}%  {}",
+            d.weekly_pct,
+            usage::human_reset(d.weekly_resets_secs.saturating_sub(elapsed)),
+        ));
+        updated_lbl_t.set_text(&format_fetch_label(d.fetched_at, d.attempted_at, d.stale, now));
+    };
+
+    (vbox, update, tick)
 }
 
-fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
+fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData), impl Fn(DateTime<Local>)) {
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
     vbox.set_halign(gtk::Align::Fill);
     vbox.set_widget_name("codex-section");
@@ -143,67 +188,67 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
     let secondary_bar = gtk::ProgressBar::new();
     secondary_bar.set_hexpand(true);
 
-    let codex_updated_lbl = gtk::Label::new(None);
-    codex_updated_lbl.set_widget_name("today-label");
-    codex_updated_lbl.set_halign(gtk::Align::Start);
+    let updated_lbl = gtk::Label::new(None);
+    updated_lbl.set_widget_name("today-label");
+    updated_lbl.set_halign(gtk::Align::Start);
 
     vbox.append(&section_lbl);
     vbox.append(&primary_lbl);
     vbox.append(&primary_bar);
     vbox.append(&secondary_lbl);
     vbox.append(&secondary_bar);
-    vbox.append(&codex_updated_lbl);
+    vbox.append(&updated_lbl);
+
+    let last_data: std::rc::Rc<std::cell::RefCell<Option<codex::CodexData>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let last_data_t = last_data.clone();
+
+    let primary_lbl_t = primary_lbl.clone();
+    let secondary_lbl_t = secondary_lbl.clone();
+    let updated_lbl_t = updated_lbl.clone();
 
     let update = move |d: &codex::CodexData| {
-        section_lbl.set_text(if d.stale { "CODEX USAGE (stale)" } else { "CODEX USAGE" });
+        let now = Local::now();
+        *last_data.borrow_mut() = Some(d.clone());
 
+        section_lbl.set_text(if d.stale { "CODEX USAGE (stale)" } else { "CODEX USAGE" });
+        primary_bar.set_fraction((d.primary_pct as f64 / 100.0).clamp(0.0, 1.0));
+        secondary_bar.set_fraction((d.secondary_pct as f64 / 100.0).clamp(0.0, 1.0));
+
+        let elapsed = (now.timestamp() - d.fetched_at).max(0) as u64;
         let plan = if d.plan.is_empty() { String::new() } else { format!("  ({})", d.plan) };
         primary_lbl.set_text(&format!(
             "5h session{plan}  {}%  {}",
             d.primary_pct,
-            codex::fmt_resets(d.primary_resets_secs)
+            codex::fmt_resets(d.primary_resets_secs.saturating_sub(elapsed)),
         ));
-        primary_bar.set_fraction((d.primary_pct as f64 / 100.0).clamp(0.0, 1.0));
-
         secondary_lbl.set_text(&format!(
             "7d weekly   {}%  {}",
             d.secondary_pct,
-            codex::fmt_resets(d.secondary_resets_secs)
+            codex::fmt_resets(d.secondary_resets_secs.saturating_sub(elapsed)),
         ));
-        secondary_bar.set_fraction((d.secondary_pct as f64 / 100.0).clamp(0.0, 1.0));
-
-        let fmt_ts = |ts: i64| -> String {
-            if ts == 0 {
-                return "--".to_string();
-            }
-            let dt = match Local.timestamp_opt(ts, 0) {
-                chrono::LocalResult::Single(dt) => dt,
-                _ => return "--".to_string(),
-            };
-            let secs = (Local::now() - dt).num_seconds().max(0);
-            if secs < 60 {
-                "less than a minute ago".to_string()
-            } else if secs < 3600 {
-                let m = secs / 60;
-                format!("{m} minute{} ago", if m == 1 { "" } else { "s" })
-            } else {
-                let h = secs / 3600;
-                let m = (secs % 3600) / 60;
-                format!("{h}h {m}m ago")
-            }
-        };
-        if d.stale {
-            codex_updated_lbl.set_text(&format!(
-                "Using data from {} · last attempt {} (failed)",
-                fmt_ts(d.fetched_at),
-                fmt_ts(d.attempted_at)
-            ));
-        } else {
-            codex_updated_lbl.set_text(&format!("Updated {}", fmt_ts(d.fetched_at)));
-        }
+        updated_lbl.set_text(&format_fetch_label(d.fetched_at, d.attempted_at, d.stale, now));
     };
 
-    (vbox, update)
+    let tick = move |now: DateTime<Local>| {
+        let guard = last_data_t.borrow();
+        let Some(ref d) = *guard else { return };
+        let elapsed = (now.timestamp() - d.fetched_at).max(0) as u64;
+        let plan = if d.plan.is_empty() { String::new() } else { format!("  ({})", d.plan) };
+        primary_lbl_t.set_text(&format!(
+            "5h session{plan}  {}%  {}",
+            d.primary_pct,
+            codex::fmt_resets(d.primary_resets_secs.saturating_sub(elapsed)),
+        ));
+        secondary_lbl_t.set_text(&format!(
+            "7d weekly   {}%  {}",
+            d.secondary_pct,
+            codex::fmt_resets(d.secondary_resets_secs.saturating_sub(elapsed)),
+        ));
+        updated_lbl_t.set_text(&format_fetch_label(d.fetched_at, d.attempted_at, d.stale, now));
+    };
+
+    (vbox, update, tick)
 }
 
 fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
@@ -257,21 +302,8 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     let date_label = gtk::Label::new(None);
     date_label.set_widget_name("date");
 
-    fn tick(time_label: &gtk::Label, date_label: &gtk::Label) {
-        let now = Local::now();
-        time_label.set_text(&now.format("%H:%M:%S").to_string());
-        date_label.set_text(&now.format("%A, %B %-d %Y").to_string());
-    }
-    tick(&time_label, &date_label);
-    let tl = time_label.clone();
-    let dl = date_label.clone();
-    glib::timeout_add_seconds_local(1, move || {
-        tick(&tl, &dl);
-        glib::ControlFlow::Continue
-    });
-
     // Usage section
-    let (usage_box, update_usage) = build_usage_section();
+    let (usage_box, update_usage, tick_usage) = build_usage_section();
 
     if let Some(mut cached) = storage::load_usage() {
         cached.stale = true;
@@ -407,7 +439,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     });
 
     // --- Codex usage section ---
-    let (codex_box, update_codex) = build_codex_section();
+    let (codex_box, update_codex, tick_codex) = build_codex_section();
 
     if let Some(mut cached) = storage::load_codex() {
         cached.stale = true;
@@ -526,6 +558,21 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
             update_codex(&data);
         }
     });
+
+    // Central clock dispatcher — drives the clock display and all time-relative
+    // labels at second boundaries, accurate to within ~50ms.
+    {
+        let tl = time_label.clone();
+        let dl = date_label.clone();
+        clock::Clock::new()
+            .on_second(move |now| {
+                tl.set_text(&now.format("%H:%M:%S").to_string());
+                dl.set_text(&now.format("%A, %B %-d %Y").to_string());
+                tick_usage(now);
+                tick_codex(now);
+            })
+            .start();
+    }
 
     // Calendar
     let calendar = gtk::Calendar::new();

@@ -64,7 +64,7 @@ fn read_access_token() -> Option<String> {
 }
 
 // "2026-03-08T17:00:00.198664+00:00" → "17:00Z"
-fn human_reset(secs: u64) -> String {
+pub fn human_reset(secs: u64) -> String {
     if secs == 0 {
         return String::new();
     }
