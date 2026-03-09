@@ -305,9 +305,11 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     // Usage section
     let (usage_box, update_usage, tick_usage) = build_usage_section();
 
-    if let Some(mut cached) = storage::load_usage() {
-        cached.stale = true;
-        update_usage(&cached);
+    let cached_usage = storage::load_usage();
+    if let Some(ref cached) = cached_usage {
+        let mut display = cached.clone();
+        display.stale = true;
+        update_usage(&display);
     }
 
     let claude_refresh = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -320,7 +322,9 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         let mut prev_weekly: u32 = 0;
         let mut prev_session_reset_secs: u64 = 0;
         let mut prev_weekly_reset_secs: u64 = 0;
-        let mut last_data: Option<usage::UsageData> = None;
+        // Seed with stored data so a failed first fetch shows last known values,
+        // not zeros.
+        let mut last_data: Option<usage::UsageData> = cached_usage;
         let mut claude_recover_notice_sent = false;
         let mut claude_pre_reset_notice_sent = false; // 5h window
         let mut claude_weekly_pre_2h_sent = false;
@@ -441,9 +445,11 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
     // --- Codex usage section ---
     let (codex_box, update_codex, tick_codex) = build_codex_section();
 
-    if let Some(mut cached) = storage::load_codex() {
-        cached.stale = true;
-        update_codex(&cached);
+    let cached_codex = storage::load_codex();
+    if let Some(ref cached) = cached_codex {
+        let mut display = cached.clone();
+        display.stale = true;
+        update_codex(&display);
     }
     let (codex_tx, codex_rx) = async_channel::unbounded::<codex::CodexData>();
 
@@ -455,7 +461,8 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         let mut prev_secondary: u32 = 0;
         let mut prev_primary_reset_secs: u64 = 0;
         let mut prev_secondary_reset_secs: u64 = 0;
-        let mut last_data: Option<codex::CodexData> = None;
+        // Seed with stored data so a failed first fetch shows last known values.
+        let mut last_data: Option<codex::CodexData> = cached_codex;
         let mut codex_recover_notice_sent = false;
         let mut codex_pre_reset_2h_sent = false;
         let mut codex_pre_reset_1h_sent = false;
