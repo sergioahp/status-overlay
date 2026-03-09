@@ -16,6 +16,10 @@ pub struct UsageData {
     pub today_tool_calls: u64,
     /// True when the API call failed and we are showing the last known values.
     pub stale: bool,
+    /// Epoch seconds when this dataset was fetched successfully (0 if unknown).
+    pub fetched_at: i64,
+    /// Epoch seconds of the last attempt (success or failure).
+    pub attempted_at: i64,
 }
 
 #[derive(Deserialize)]
@@ -186,5 +190,7 @@ pub fn fetch() -> Option<UsageData> {
         today_messages,
         today_tool_calls,
         stale: false,
+        fetched_at: Local::now().timestamp(),
+        attempted_at: Local::now().timestamp(),
     })
 }

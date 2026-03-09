@@ -4,7 +4,7 @@ mod notify;
 mod usage;
 mod storage;
 
-use chrono::Local;
+use chrono::{Local, TimeZone};
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use std::time::{Duration, Instant};
@@ -88,13 +88,24 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
             d.today_messages, d.today_tool_calls
         ));
 
+        let fmt_ts = |ts: i64| {
+            if ts == 0 {
+                "--".to_string()
+            } else {
+                match Local.timestamp_opt(ts, 0) {
+                    chrono::LocalResult::Single(dt) => dt.format("%H:%M:%S").to_string(),
+                    _ => "--".to_string(),
+                }
+            }
+        };
         if d.stale {
             updated_lbl.set_text(&format!(
-                "Attempted update at {} (failed; cached values)",
-                Local::now().format("%H:%M:%S")
+                "Using data from {} · last attempt {} (failed)",
+                fmt_ts(d.fetched_at),
+                fmt_ts(d.attempted_at)
             ));
         } else {
-            updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
+            updated_lbl.set_text(&format!("Updated {}", fmt_ts(d.fetched_at)));
         }
     };
 
@@ -151,13 +162,24 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
         ));
         secondary_bar.set_fraction((d.secondary_pct as f64 / 100.0).clamp(0.0, 1.0));
 
+        let fmt_ts = |ts: i64| {
+            if ts == 0 {
+                "--".to_string()
+            } else {
+                match Local.timestamp_opt(ts, 0) {
+                    chrono::LocalResult::Single(dt) => dt.format("%H:%M:%S").to_string(),
+                    _ => "--".to_string(),
+                }
+            }
+        };
         if d.stale {
             codex_updated_lbl.set_text(&format!(
-                "Attempted update at {} (failed; cached values)",
-                Local::now().format("%H:%M:%S")
+                "Using data from {} · last attempt {} (failed)",
+                fmt_ts(d.fetched_at),
+                fmt_ts(d.attempted_at)
             ));
         } else {
-            codex_updated_lbl.set_text(&format!("Updated {}", Local::now().format("%H:%M:%S")));
+            codex_updated_lbl.set_text(&format!("Updated {}", fmt_ts(d.fetched_at)));
         }
     };
 
@@ -271,6 +293,9 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
             let result = tokio::task::spawn_blocking(usage::fetch).await.unwrap_or_default();
             match result {
                 Some(data) => {
+                    let mut data = data;
+                    data.attempted_at = Local::now().timestamp();
+                    data.fetched_at = data.attempted_at;
                     if let Some(t) = notify::transition(prev_session, data.session_pct.round() as u32) {
                         match t {
                             notify::Transition::Low      => notify::send("Claude session low", &format!("{}% of 5h session used", data.session_pct)),
@@ -343,6 +368,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                 }
                 None => {
                     let mut stale = last_data.clone().unwrap_or_default();
+                    stale.attempted_at = Local::now().timestamp();
                     stale.stale = true;
                     let _ = claude_tx.send(stale).await;
                 }
@@ -387,6 +413,9 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
             let result = tokio::task::spawn_blocking(codex::fetch).await.unwrap_or_default();
             match result {
                 Some(data) => {
+                    let mut data = data;
+                    data.attempted_at = Local::now().timestamp();
+                    data.fetched_at = data.attempted_at;
                     if let Some(t) = notify::transition(prev_primary, data.primary_pct) {
                         match t {
                             notify::Transition::Low      => notify::send("Codex session low", &format!("{}% of session used", data.primary_pct)),
@@ -460,6 +489,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                 }
                 None => {
                     let mut stale = last_data.clone().unwrap_or_default();
+                    stale.attempted_at = Local::now().timestamp();
                     stale.stale = true;
                     let _ = codex_tx.send(stale).await;
                 }

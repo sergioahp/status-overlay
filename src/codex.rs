@@ -10,6 +10,8 @@ pub struct CodexData {
     pub secondary_pct: u32,
     pub secondary_resets_secs: u64,
     pub stale: bool,
+    pub fetched_at: i64,
+    pub attempted_at: i64,
 }
 
 #[derive(Deserialize)]
@@ -107,5 +109,7 @@ pub fn fetch() -> Option<CodexData> {
         secondary_pct: secondary.and_then(|w| w.used_percent).unwrap_or(0),
         secondary_resets_secs: secondary.and_then(|w| w.reset_after_seconds).unwrap_or(0),
         stale: false,
+        fetched_at: Local::now().timestamp(),
+        attempted_at: Local::now().timestamp(),
     })
 }
