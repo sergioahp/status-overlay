@@ -88,14 +88,24 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData)) {
             d.today_messages, d.today_tool_calls
         ));
 
-        let fmt_ts = |ts: i64| {
+        let fmt_ts = |ts: i64| -> String {
             if ts == 0 {
-                "--".to_string()
+                return "--".to_string();
+            }
+            let dt = match Local.timestamp_opt(ts, 0) {
+                chrono::LocalResult::Single(dt) => dt,
+                _ => return "--".to_string(),
+            };
+            let secs = (Local::now() - dt).num_seconds().max(0);
+            if secs < 60 {
+                "less than a minute ago".to_string()
+            } else if secs < 3600 {
+                let m = secs / 60;
+                format!("{m} minute{} ago", if m == 1 { "" } else { "s" })
             } else {
-                match Local.timestamp_opt(ts, 0) {
-                    chrono::LocalResult::Single(dt) => dt.format("%H:%M:%S").to_string(),
-                    _ => "--".to_string(),
-                }
+                let h = secs / 3600;
+                let m = (secs % 3600) / 60;
+                format!("{h}h {m}m ago")
             }
         };
         if d.stale {
@@ -162,14 +172,24 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData)) {
         ));
         secondary_bar.set_fraction((d.secondary_pct as f64 / 100.0).clamp(0.0, 1.0));
 
-        let fmt_ts = |ts: i64| {
+        let fmt_ts = |ts: i64| -> String {
             if ts == 0 {
-                "--".to_string()
+                return "--".to_string();
+            }
+            let dt = match Local.timestamp_opt(ts, 0) {
+                chrono::LocalResult::Single(dt) => dt,
+                _ => return "--".to_string(),
+            };
+            let secs = (Local::now() - dt).num_seconds().max(0);
+            if secs < 60 {
+                "less than a minute ago".to_string()
+            } else if secs < 3600 {
+                let m = secs / 60;
+                format!("{m} minute{} ago", if m == 1 { "" } else { "s" })
             } else {
-                match Local.timestamp_opt(ts, 0) {
-                    chrono::LocalResult::Single(dt) => dt.format("%H:%M:%S").to_string(),
-                    _ => "--".to_string(),
-                }
+                let h = secs / 3600;
+                let m = (secs % 3600) / 60;
+                format!("{h}h {m}m ago")
             }
         };
         if d.stale {
