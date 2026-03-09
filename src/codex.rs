@@ -9,8 +9,11 @@ pub struct CodexData {
     pub primary_resets_secs: u64,
     pub secondary_pct: u32,
     pub secondary_resets_secs: u64,
+    #[serde(default)]
     pub stale: bool,
+    #[serde(default)]
     pub fetched_at: i64,
+    #[serde(default)]
     pub attempted_at: i64,
 }
 

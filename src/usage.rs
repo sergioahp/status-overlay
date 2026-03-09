@@ -15,10 +15,13 @@ pub struct UsageData {
     pub today_messages: u64,
     pub today_tool_calls: u64,
     /// True when the API call failed and we are showing the last known values.
+    #[serde(default)]
     pub stale: bool,
     /// Epoch seconds when this dataset was fetched successfully (0 if unknown).
+    #[serde(default)]
     pub fetched_at: i64,
     /// Epoch seconds of the last attempt (success or failure).
+    #[serde(default)]
     pub attempted_at: i64,
 }
 
