@@ -522,9 +522,10 @@ fn extract_pct_after(text: &str, label: &str) -> Option<f64> {
         .map(|i| i + 1)
         .unwrap_or(0);
     let pct: f64 = before_pct[num_start..].parse().ok()?;
-    // If the context says "remaining", invert to get "used".
-    let context = &after[..pct_pos.min(after.len())];
-    if context.contains("remaining") {
+    // "remaining" appears AFTER the % sign on the same line.
+    let after_pct = &after[pct_pos..];
+    let line_end = after_pct.find('\n').unwrap_or(after_pct.len());
+    if after_pct[..line_end].contains("remaining") {
         Some(100.0 - pct)
     } else {
         Some(pct)
@@ -801,6 +802,211 @@ fn fetch_web(today_messages: u64, today_tool_calls: u64) -> Option<UsageData> {
         today_messages,
         today_tool_calls,
     ))
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── normalize_plan ────────────────────────────────────────────────────────
+
+    #[test]
+    fn normalize_plan_known_tiers() {
+        assert_eq!(normalize_plan("claude_pro"), "Pro");
+        assert_eq!(normalize_plan("pro"), "Pro");
+        assert_eq!(normalize_plan("claude_max"), "Max");
+        assert_eq!(normalize_plan("max"), "Max");
+        assert_eq!(normalize_plan("claude_team"), "Team");
+        assert_eq!(normalize_plan("team"), "Team");
+        assert_eq!(normalize_plan("claude_enterprise"), "Enterprise");
+        assert_eq!(normalize_plan("enterprise"), "Enterprise");
+    }
+
+    #[test]
+    fn normalize_plan_unknown_capitalizes() {
+        assert_eq!(normalize_plan("business"), "Business");
+        assert_eq!(normalize_plan("free"), "Free");
+    }
+
+    #[test]
+    fn normalize_plan_empty() {
+        assert_eq!(normalize_plan(""), "");
+    }
+
+    // ── human_reset ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn human_reset_zero_is_empty() {
+        assert_eq!(human_reset(0), "");
+    }
+
+    #[test]
+    fn human_reset_relative_for_short_windows() {
+        // ≤ 6h → relative format
+        assert_eq!(human_reset(3600 + 5 * 60), "resets in 1h 5m");
+        assert_eq!(human_reset(30 * 60), "resets in 0h 30m");
+        assert_eq!(human_reset(6 * 3600), "resets in 6h 0m");
+    }
+
+    #[test]
+    fn human_reset_just_over_6h_is_absolute() {
+        // 6h + 1s should switch to absolute format (contains "resets" but not "resets in")
+        let s = human_reset(6 * 3600 + 1);
+        assert!(s.starts_with("resets "));
+        assert!(!s.starts_with("resets in "));
+    }
+
+    // ── strip_ansi ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn strip_ansi_plain_text_unchanged() {
+        assert_eq!(strip_ansi(b"hello world"), "hello world");
+    }
+
+    #[test]
+    fn strip_ansi_removes_color_codes() {
+        // ESC[31m red ESC[0m
+        let input = b"\x1b[31mred text\x1b[0m";
+        assert_eq!(strip_ansi(input), "red text");
+    }
+
+    #[test]
+    fn strip_ansi_removes_cursor_movement() {
+        // ESC[2A (cursor up 2)
+        let input = b"line1\x1b[2Aline2";
+        assert_eq!(strip_ansi(input), "line1line2");
+    }
+
+    #[test]
+    fn strip_ansi_removes_osc_with_bel() {
+        // ESC ] 0 ; title BEL
+        let input = b"\x1b]0;window title\x07content";
+        assert_eq!(strip_ansi(input), "content");
+    }
+
+    #[test]
+    fn strip_ansi_removes_osc_with_st() {
+        // ESC ] 0 ; title ESC \
+        let input = b"\x1b]0;window title\x1b\\content";
+        assert_eq!(strip_ansi(input), "content");
+    }
+
+    #[test]
+    fn strip_ansi_keeps_box_drawing_chars() {
+        // Box-drawing characters are regular Unicode, not ANSI sequences.
+        let input = "│ Current session 75% │".as_bytes();
+        let result = strip_ansi(input);
+        assert!(result.contains("Current session"));
+        assert!(result.contains("75%"));
+    }
+
+    #[test]
+    fn strip_ansi_complex_tui_output() {
+        // Typical PTY line: color + text + reset + cursor positioning
+        let input = b"\x1b[1;32mCurrent session\x1b[0m: \x1b[33m75%\x1b[0m used\x1b[K";
+        let result = strip_ansi(input);
+        assert_eq!(result, "Current session: 75% used");
+    }
+
+    // ── extract_pct_after ─────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_pct_used_format() {
+        let text = "Current session: 75% used, resets in 2h";
+        assert_eq!(extract_pct_after(text, "Current session"), Some(75.0));
+    }
+
+    #[test]
+    fn extract_pct_remaining_inverts() {
+        let text = "Current session: 25% remaining";
+        assert_eq!(extract_pct_after(text, "Current session"), Some(75.0));
+    }
+
+    #[test]
+    fn extract_pct_decimal() {
+        let text = "Current session: 99.5% used";
+        assert_eq!(extract_pct_after(text, "Current session"), Some(99.5));
+    }
+
+    #[test]
+    fn extract_pct_zero() {
+        let text = "Current session: 0% used";
+        assert_eq!(extract_pct_after(text, "Current session"), Some(0.0));
+    }
+
+    #[test]
+    fn extract_pct_missing_label_returns_none() {
+        let text = "Current session: 50% used";
+        assert_eq!(extract_pct_after(text, "Current week"), None);
+    }
+
+    #[test]
+    fn extract_pct_with_surrounding_box_chars() {
+        // As seen in real TUI output after ANSI stripping.
+        let text = "│ Current session          75% used  •  resets in 2h │";
+        assert_eq!(extract_pct_after(text, "Current session"), Some(75.0));
+    }
+
+    // ── parse_usage_text ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_usage_text_basic() {
+        let text = "Current session: 75% used\nCurrent week (all models): 50% used";
+        let data = parse_usage_text(text, 10, 5).expect("should parse");
+        assert_eq!(data.session_pct, 75.0);
+        assert_eq!(data.weekly_pct, 50.0);
+        assert_eq!(data.today_messages, 10);
+        assert_eq!(data.today_tool_calls, 5);
+    }
+
+    #[test]
+    fn parse_usage_text_remaining_format() {
+        let text = "Current session: 30% remaining\nCurrent week (all models): 40% remaining";
+        let data = parse_usage_text(text, 0, 0).expect("should parse");
+        assert_eq!(data.session_pct, 70.0);
+        assert_eq!(data.weekly_pct, 60.0);
+    }
+
+    #[test]
+    fn parse_usage_text_opus_weekly() {
+        // Falls back to opus-specific label.
+        let text = "Current session: 80% used\nCurrent week (Opus): 30% used";
+        let data = parse_usage_text(text, 0, 0).expect("should parse");
+        assert_eq!(data.session_pct, 80.0);
+        assert_eq!(data.weekly_pct, 30.0);
+    }
+
+    #[test]
+    fn parse_usage_text_no_session_returns_none() {
+        // Without "Current session", the function must return None.
+        let text = "Current week (all models): 50% used";
+        assert!(parse_usage_text(text, 0, 0).is_none());
+    }
+
+    #[test]
+    fn parse_usage_text_tui_box_chars() {
+        // Realistic stripped TUI output with box-drawing characters.
+        let text = concat!(
+            "╭────────────────────────────────────────╮\n",
+            "│ Current session          75% used      │\n",
+            "│ Current week (all models) 50% used     │\n",
+            "╰────────────────────────────────────────╯\n",
+        );
+        let data = parse_usage_text(text, 0, 0).expect("should parse");
+        assert_eq!(data.session_pct, 75.0);
+        assert_eq!(data.weekly_pct, 50.0);
+    }
+
+    #[test]
+    fn parse_usage_text_no_weekly_defaults_to_zero() {
+        // Weekly not found → defaults to 0, not an error.
+        let text = "Current session: 60% used";
+        let data = parse_usage_text(text, 0, 0).expect("should parse");
+        assert_eq!(data.session_pct, 60.0);
+        assert_eq!(data.weekly_pct, 0.0);
+    }
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
