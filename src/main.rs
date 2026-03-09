@@ -111,16 +111,24 @@ fn build_usage_section() -> (gtk::Box, impl Fn(&usage::UsageData), impl Fn(DateT
         let now = Local::now();
         *last_data.borrow_mut() = Some(d.clone());
 
-        section_lbl.set_text(if d.stale { "CLAUDE USAGE (stale)" } else { "CLAUDE USAGE" });
+        let plan_part = if d.plan.is_empty() { String::new() } else { format!("  ({})", d.plan) };
+        section_lbl.set_text(&format!(
+            "CLAUDE USAGE{}{}",
+            plan_part,
+            if d.stale { " (stale)" } else { "" },
+        ));
         session_bar.set_fraction((d.session_pct / 100.0).clamp(0.0, 1.0));
         weekly_bar.set_fraction((d.weekly_pct / 100.0).clamp(0.0, 1.0));
 
-        if d.extra_limit_cents > 0.0 {
+        if d.extra_enabled && d.extra_limit_cents > 0.0 {
             extra_lbl.set_text(&format!(
                 "Extra  ${:.2} / ${:.2}",
                 d.extra_used_cents / 100.0,
                 d.extra_limit_cents / 100.0,
             ));
+            extra_lbl.set_visible(true);
+        } else {
+            extra_lbl.set_visible(false);
         }
         today_lbl.set_text(&format!(
             "Today  {} msgs  ·  {} tool calls",
