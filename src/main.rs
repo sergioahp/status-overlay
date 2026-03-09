@@ -35,11 +35,7 @@ fn fmt_ago(ts: i64, now: DateTime<Local>) -> String {
 
 fn format_fetch_label(fetched_at: i64, attempted_at: i64, stale: bool, now: DateTime<Local>) -> String {
     if stale {
-        format!(
-            "Using data from {} · last attempt {} (failed)",
-            fmt_ago(fetched_at, now),
-            fmt_ago(attempted_at, now),
-        )
+        format!("Updated {} · last attempt {}", fmt_ago(fetched_at, now), fmt_ago(attempted_at, now))
     } else {
         format!("Updated {}", fmt_ago(fetched_at, now))
     }
