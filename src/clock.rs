@@ -42,10 +42,15 @@ impl Clock {
     pub fn start(self) {
         let second_subs: Rc<Vec<Cb>> = Rc::new(self.second_subs);
         let minute_subs: Rc<Vec<Cb>> = Rc::new(self.minute_subs);
-        // Unix timestamp of the next second boundary we have already scheduled.
-        let last_scheduled: Rc<Cell<i64>> = Rc::new(Cell::new(0));
         // Unix minute of the last minute-boundary fire.
         let last_minute: Rc<Cell<i64>> = Rc::new(Cell::new(0));
+        // Generation counter: incremented on every 200ms tick so that each tick
+        // supersedes the previous one-shot. Old one-shots still fire (glib
+        // timeouts can't be cancelled cheaply) but check the generation and
+        // no-op if they're stale. This means the LAST 200ms tick before each
+        // second boundary is the one that actually fires — giving the most
+        // accurate estimate of ms_until at the cost of a few extra no-op firings.
+        let generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
 
         // Fire immediately so the UI is populated before the first boundary tick.
         let now = Local::now();
@@ -55,20 +60,21 @@ impl Clock {
 
         glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
             let now = Local::now();
-            // The next whole second we want to fire at.
-            let next_sec_ts = now.timestamp() + 1;
             let ms_until = 1000 - now.timestamp_subsec_millis() as u64;
 
-            // Only schedule if we haven't already queued this second boundary.
-            if last_scheduled.get() != next_sec_ts {
-                last_scheduled.set(next_sec_ts);
+            // Each 200ms tick gets a new generation, superseding the previous
+            // one-shot. The old one-shot will fire but do nothing.
+            let gen = generation.get().wrapping_add(1);
+            generation.set(gen);
 
-                let subs = second_subs.clone();
-                let min_subs = minute_subs.clone();
-                let last_min = last_minute.clone();
+            let subs = second_subs.clone();
+            let min_subs = minute_subs.clone();
+            let last_min = last_minute.clone();
+            let gen_check = generation.clone();
 
-                // One-shot: fires once at the boundary then removes itself.
-                glib::timeout_add_local(std::time::Duration::from_millis(ms_until), move || {
+            glib::timeout_add_local(std::time::Duration::from_millis(ms_until), move || {
+                // Only the most-recently-scheduled one-shot fires.
+                if gen_check.get() == gen {
                     let fire_time = Local::now();
                     for cb in subs.iter() {
                         cb(fire_time);
@@ -81,10 +87,10 @@ impl Clock {
                             cb(fire_time);
                         }
                     }
+                }
 
-                    glib::ControlFlow::Break
-                });
-            }
+                glib::ControlFlow::Break
+            });
 
             glib::ControlFlow::Continue
         });
