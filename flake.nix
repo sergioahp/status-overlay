@@ -24,6 +24,7 @@
           pkgs.pango
           pkgs.gdk-pixbuf
           pkgs.graphene
+          pkgs.sqlite
         ];
 
         commonArgs = {
@@ -33,7 +34,7 @@
               (craneLib.filterCargoSources path type)
               || pkgs.lib.hasSuffix ".css" path;
           };
-          buildInputs = [ pkgs.gtk4 pkgs.gtk4-layer-shell ];
+          buildInputs = [ pkgs.gtk4 pkgs.gtk4-layer-shell pkgs.sqlite ];
           nativeBuildInputs = [ pkgs.pkg-config pkgs.wrapGAppsHook4 ];
         };
 
@@ -64,15 +65,7 @@
         devShells.default = pkgs.mkShell {
           inputsFrom = [ status-overlay ];
           packages = [ status-overlay toolchain pkgs.rust-analyzer ];
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
-            pkgs.gtk4
-            pkgs.gtk4-layer-shell
-            pkgs.glib
-            pkgs.cairo
-            pkgs.pango
-            pkgs.gdk-pixbuf
-            pkgs.graphene
-          ];
+          LD_LIBRARY_PATH = runtimeLibs;
         };
       });
 }

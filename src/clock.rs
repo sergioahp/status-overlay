@@ -33,6 +33,7 @@ impl Clock {
         self
     }
 
+    #[allow(dead_code)]
     pub fn on_minute(mut self, cb: impl Fn(DateTime<Local>) + 'static) -> Self {
         self.minute_subs.push(Box::new(cb));
         self
