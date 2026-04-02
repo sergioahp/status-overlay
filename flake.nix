@@ -42,6 +42,9 @@
 
         status-overlay = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
+          preCheck = ''
+            export LD_LIBRARY_PATH=${runtimeLibs}:$LD_LIBRARY_PATH
+          '';
           postInstall = ''
             wrapProgram $out/bin/status-overlay \
               --prefix LD_LIBRARY_PATH : ${runtimeLibs} \
