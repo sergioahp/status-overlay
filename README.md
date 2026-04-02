@@ -49,7 +49,7 @@ status-overlay --help   # show CLI help
 
 The socket lives at `$XDG_RUNTIME_DIR/status-overlay.sock`.
 
-Last successful fetches are cached to disk at `$XDG_STATE_HOME/status-overlay/{usage,codex}.json` (falls back to `~/.local/state`). Cached data is shown as “stale” on startup until a fresh fetch succeeds.
+Last successful fetches are cached to disk at `$XDG_STATE_HOME/status-overlay/{usage,codex}.json` (falls back to `~/.local/state`). Rolling 14-day histories are also written to `{usage,codex}_history.json` for plotting. Cached data is shown as “stale” on startup until a fresh fetch succeeds.
 
 Press `q` while the overlay has focus to hide it.
 

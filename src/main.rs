@@ -423,6 +423,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     prev_weekly  = data.weekly_pct.round() as u32;
                     last_data = Some(data.clone());
                     storage::save_usage(&data);
+                    storage::append_usage_sample(&data);
                     let _ = claude_tx.send(data).await;
                     last_fetch = Instant::now();
                 }
@@ -548,6 +549,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     prev_secondary = data.secondary_pct;
                     last_data = Some(data.clone());
                     storage::save_codex(&data);
+                    storage::append_codex_sample(&data);
                     let _ = codex_tx.send(data).await;
                 }
                 None => {
