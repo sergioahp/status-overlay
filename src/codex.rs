@@ -74,7 +74,12 @@ pub fn fmt_resets(secs: u64) -> String {
     // For windows ≤6h always use relative — date formats are confusing when
     // the reset is only a few hours away.
     if secs <= 6 * 3600 {
-        return format!("resets in {h}h {m}m");
+        let relative = match (h, m) {
+            (0, m) => format!("{m}m"),
+            (h, 0) => format!("{h}h"),
+            (h, m) => format!("{h}h {m}m"),
+        };
+        return format!("resets in {relative}");
     }
     let now = Local::now();
     let target = now + Duration::seconds(secs as i64);

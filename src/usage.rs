@@ -148,7 +148,12 @@ pub fn human_reset(secs: u64) -> String {
     // For windows ≤6h always use relative — "tomorrow 12:55 AM" is confusing
     // when the reset is only a few hours away.
     if secs <= 6 * 3600 {
-        return format!("resets in {h}h {m}m");
+        let relative = match (h, m) {
+            (0, m) => format!("{m}m"),
+            (h, 0) => format!("{h}h"),
+            (h, m) => format!("{h}h {m}m"),
+        };
+        return format!("resets in {relative}");
     }
     let now = Local::now();
     let target = now + Duration::seconds(secs as i64);
@@ -846,8 +851,8 @@ mod tests {
     fn human_reset_relative_for_short_windows() {
         // ≤ 6h → relative format
         assert_eq!(human_reset(3600 + 5 * 60), "resets in 1h 5m");
-        assert_eq!(human_reset(30 * 60), "resets in 0h 30m");
-        assert_eq!(human_reset(6 * 3600), "resets in 6h 0m");
+        assert_eq!(human_reset(30 * 60), "resets in 30m");
+        assert_eq!(human_reset(6 * 3600), "resets in 6h");
     }
 
     #[test]
@@ -1011,22 +1016,23 @@ mod tests {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-/// Try sources in order: OAuth API → web session (browser cookies / env var)
-/// → CLI PTY probe.  Returns None only when all sources fail.
+/// Try sources in order: local CLI PTY probe → OAuth API → web session
+/// (browser cookies / env var). Returns None only when all sources fail.
 pub fn fetch() -> Option<UsageData> {
     let (today_messages, today_tool_calls) = read_today_stats();
 
+    if let Some(data) = fetch_cli(today_messages, today_tool_calls) {
+        eprintln!("[claude] CLI probe succeeded");
+        return Some(data);
+    }
+    eprintln!("[claude] CLI probe failed, trying OAuth…");
     if let Some(data) = fetch_oauth(today_messages, today_tool_calls) {
+        eprintln!("[claude] OAuth succeeded");
         return Some(data);
     }
     eprintln!("[claude] OAuth failed, trying web session…");
     if let Some(data) = fetch_web(today_messages, today_tool_calls) {
         eprintln!("[claude] web session succeeded");
-        return Some(data);
-    }
-    eprintln!("[claude] web session failed, trying CLI probe…");
-    if let Some(data) = fetch_cli(today_messages, today_tool_calls) {
-        eprintln!("[claude] CLI probe succeeded");
         return Some(data);
     }
     None
