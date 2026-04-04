@@ -382,7 +382,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         && !claude_weekly_pre_2h_sent
                         && data.weekly_pct < 100.0
                     {
-                        notify::send("Claude weekly resets in ~2h", "10%+ of weekly remains; use it before reset");
+                        notify::send(
+                            "Claude weekly resets in ~2h",
+                            &format!("{weekly_remaining:.0}% of weekly remains; use it before reset"),
+                        );
                         claude_weekly_pre_2h_sent = true;
                     }
                     if data.weekly_resets_secs > 0
@@ -391,7 +394,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         && !claude_weekly_pre_1h_sent
                         && data.weekly_pct < 100.0
                     {
-                        notify::send("Claude weekly resets in ~1h", "10%+ of weekly remains; use it before reset");
+                        notify::send(
+                            "Claude weekly resets in ~1h",
+                            &format!("{weekly_remaining:.0}% of weekly remains; use it before reset"),
+                        );
                         claude_weekly_pre_1h_sent = true;
                     }
                     // Pre-reset reminder when >30% remains and reset is within 1h
@@ -404,7 +410,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         && !claude_pre_reset_notice_sent
                         && data.session_pct < 100.0
                     {
-                        notify::send("Claude 5h resets in ~1h", "30%+ still unused; grab it now");
+                        notify::send(
+                            "Claude 5h resets in ~1h",
+                            &format!("{:.0}% still unused; grab it now", 100.0 - data.session_pct),
+                        );
                         claude_pre_reset_notice_sent = true;
                     }
                     let depleted = data.session_pct >= 100.0 && data.weekly_pct >= 100.0;
@@ -505,7 +514,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         && !codex_primary_pre_reset_sent
                         && data.primary_pct < 100
                     {
-                        notify::send("Codex 5h resets in ~1h", "30%+ still unused; grab it now");
+                        notify::send(
+                            "Codex 5h resets in ~1h",
+                            &format!("{primary_remaining}% still unused; grab it now"),
+                        );
                         codex_primary_pre_reset_sent = true;
                     }
                     // Pre-reset reminders for secondary window: 2h and 1h if >=10% remains
@@ -520,7 +532,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         && !codex_pre_reset_2h_sent
                         && data.secondary_pct < 100
                     {
-                        notify::send("Codex weekly resets in ~2h", "10%+ still available; use it before reset");
+                        notify::send(
+                            "Codex weekly resets in ~2h",
+                            &format!("{remaining_secondary}% still available; use it before reset"),
+                        );
                         codex_pre_reset_2h_sent = true;
                     }
                     if data.secondary_resets_secs > 0
@@ -529,7 +544,10 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         && !codex_pre_reset_1h_sent
                         && data.secondary_pct < 100
                     {
-                        notify::send("Codex weekly resets in ~1h", "10%+ still available; use it before reset");
+                        notify::send(
+                            "Codex weekly resets in ~1h",
+                            &format!("{remaining_secondary}% still available; use it before reset"),
+                        );
                         codex_pre_reset_1h_sent = true;
                     }
 
