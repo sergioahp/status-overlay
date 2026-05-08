@@ -603,11 +603,15 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         }
     });
 
+    // Calendar
+    let calendar = gtk::Calendar::new();
+
     // Central clock dispatcher — drives the clock display and all time-relative
     // labels at second boundaries, accurate to within ~50ms.
     {
         let tl = time_label.clone();
         let dl = date_label.clone();
+        let cal = calendar.clone();
         clock::Clock::new()
             .on_second(move |now| {
                 tl.set_text(&now.format("%H:%M:%S").to_string());
@@ -615,11 +619,13 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                 tick_usage(now);
                 tick_codex(now);
             })
+            .on_minute(move |_| {
+                if let Ok(gdt) = glib::DateTime::now_local() {
+                    cal.select_day(&gdt);
+                }
+            })
             .start();
     }
-
-    // Calendar
-    let calendar = gtk::Calendar::new();
 
     vbox.append(&time_label);
     vbox.append(&date_label);
