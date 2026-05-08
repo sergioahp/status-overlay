@@ -83,7 +83,7 @@ def load_claude_quota_history(db_path: Path) -> pd.DataFrame:
     with sqlite3.connect(db_path) as conn:
         frame = pd.read_sql_query(
             """
-            SELECT fetched_at AS ts, session_pct, weekly_pct, plan
+            SELECT fetched_at AS ts, session_pct, weekly_pct, session_resets_secs, weekly_resets_secs, plan
             FROM claude_usage_samples
             ORDER BY fetched_at, id
             """,
@@ -102,8 +102,13 @@ def load_codex_history_sqlite(path: Path) -> pd.DataFrame:
     with sqlite3.connect(path) as conn:
         frame = pd.read_sql_query(
             """
-            SELECT fetched_at AS ts, primary_pct, secondary_pct
+            SELECT fetched_at AS ts, primary_pct, secondary_pct, primary_resets_secs, secondary_resets_secs, plan
             FROM codex_usage_samples
+            WHERE primary_resets_secs > 0
+               OR secondary_resets_secs > 0
+               OR primary_pct > 0
+               OR secondary_pct > 0
+               OR plan <> ''
             ORDER BY fetched_at, id
             """,
             conn,
@@ -124,6 +129,12 @@ def load_codex_history_json(path: Path) -> pd.DataFrame:
     frame = pd.DataFrame(raw)
     if frame.empty:
         return frame
+    if "primary_resets_secs" not in frame:
+        frame["primary_resets_secs"] = pd.NA
+    if "secondary_resets_secs" not in frame:
+        frame["secondary_resets_secs"] = pd.NA
+    if "plan" not in frame:
+        frame["plan"] = ""
     frame["datetime"] = pd.to_datetime(frame["ts"], unit="s")
     frame = frame.sort_values("datetime").reset_index(drop=True)
     frame = frame.drop_duplicates(subset=["datetime", "primary_pct", "secondary_pct"])
@@ -445,6 +456,27 @@ def plot_claude_session_burn_proxy(session_estimates: pd.DataFrame, out_dir: Pat
     plt.close(fig)
 
 
+def plot_claude_quota_last_48h(history: pd.DataFrame, out_dir: Path):
+    if history.empty:
+        return
+    end = history["datetime"].max()
+    start = end - pd.Timedelta(hours=48)
+    window = history[history["datetime"] >= start].copy()
+    if window.empty:
+        return
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.step(window["datetime"], window["session_pct"], where="post", color="#b22222", linewidth=2, label="5h session % used")
+    ax.step(window["datetime"], window["weekly_pct"], where="post", color="#1d3557", linewidth=2, label="7d weekly % used")
+    configure_axes(ax, "Claude Quota Usage (Last 48 Hours)", "Percent used")
+    ax.set_xlabel("Time")
+    ax.set_ylim(0, 100)
+    ax.legend()
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(out_dir / "claude_quota_last_48h.png", dpi=150)
+    plt.close(fig)
+
+
 def plot_codex_session_burn(history: pd.DataFrame, out_dir: Path):
     fig, ax = plt.subplots(figsize=(11, 5))
     ax.step(history["datetime"], history["primary_pct"], where="post", color="#264653", linewidth=2, label="Primary window")
@@ -456,6 +488,143 @@ def plot_codex_session_burn(history: pd.DataFrame, out_dir: Path):
     fig.autofmt_xdate()
     fig.tight_layout()
     fig.savefig(out_dir / "codex_session_burn.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_codex_session_burn_last_48h(history: pd.DataFrame, out_dir: Path):
+    if history.empty:
+        return
+    end = history["datetime"].max()
+    start = end - pd.Timedelta(hours=48)
+    window = history[history["datetime"] >= start].copy()
+    if window.empty:
+        return
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.step(window["datetime"], window["primary_pct"], where="post", color="#264653", linewidth=2, label="Primary window")
+    ax.step(window["datetime"], window["secondary_pct"], where="post", color="#e9c46a", linewidth=2, label="Secondary window")
+    configure_axes(ax, "Codex Session Burn-Up (Last 48 Hours)", "Used percent")
+    ax.set_xlabel("Time")
+    ax.set_ylim(0, 100)
+    ax.legend()
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(out_dir / "codex_session_burn_last_48h.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_quota_comparison_last_48h(claude_history: pd.DataFrame, codex_history: pd.DataFrame, out_dir: Path):
+    if claude_history.empty or codex_history.empty:
+        return
+    end = max(claude_history["datetime"].max(), codex_history["datetime"].max())
+    start = end - pd.Timedelta(hours=48)
+    claude_window = claude_history[claude_history["datetime"] >= start].copy()
+    codex_window = codex_history[codex_history["datetime"] >= start].copy()
+    if claude_window.empty or codex_window.empty:
+        return
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+
+    axes[0].step(claude_window["datetime"], claude_window["session_pct"], where="post", color="#b22222", linewidth=2, label="Claude 5h")
+    axes[0].step(claude_window["datetime"], claude_window["weekly_pct"], where="post", color="#1d3557", linewidth=2, label="Claude 7d")
+    configure_axes(axes[0], "Claude vs Codex Quota Usage (Last 48 Hours)", "Claude % used")
+    axes[0].set_ylim(0, 100)
+    axes[0].legend(loc="upper left")
+
+    axes[1].step(codex_window["datetime"], codex_window["primary_pct"], where="post", color="#264653", linewidth=2, label="Codex primary")
+    axes[1].step(codex_window["datetime"], codex_window["secondary_pct"], where="post", color="#e9c46a", linewidth=2, label="Codex secondary")
+    configure_axes(axes[1], "", "Codex % used")
+    axes[1].set_xlabel("Time")
+    axes[1].set_ylim(0, 100)
+    axes[1].legend(loc="upper left")
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(out_dir / "quota_comparison_last_48h.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_reset_countdowns_last_48h(claude_history: pd.DataFrame, codex_history: pd.DataFrame, out_dir: Path):
+    if claude_history.empty or codex_history.empty:
+        return
+    end = max(claude_history["datetime"].max(), codex_history["datetime"].max())
+    start = end - pd.Timedelta(hours=48)
+    claude_window = claude_history[claude_history["datetime"] >= start].copy()
+    codex_window = codex_history[codex_history["datetime"] >= start].copy()
+    if claude_window.empty or codex_window.empty:
+        return
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+
+    axes[0].step(
+        claude_window["datetime"],
+        claude_window["session_resets_secs"] / 3600.0,
+        where="post",
+        color="#b22222",
+        linewidth=2,
+        label="Claude 5h reset countdown",
+    )
+    axes[0].step(
+        claude_window["datetime"],
+        claude_window["weekly_resets_secs"] / 3600.0,
+        where="post",
+        color="#1d3557",
+        linewidth=2,
+        label="Claude 7d reset countdown",
+    )
+    configure_axes(axes[0], "Quota Reset Countdowns (Last 48 Hours)", "Claude hours to reset")
+    axes[0].legend(loc="upper right")
+
+    axes[1].step(
+        codex_window["datetime"],
+        codex_window["primary_resets_secs"] / 3600.0,
+        where="post",
+        color="#264653",
+        linewidth=2,
+        label="Codex primary reset countdown",
+    )
+    axes[1].step(
+        codex_window["datetime"],
+        codex_window["secondary_resets_secs"] / 3600.0,
+        where="post",
+        color="#e9c46a",
+        linewidth=2,
+        label="Codex secondary reset countdown",
+    )
+    configure_axes(axes[1], "", "Codex hours to reset")
+    axes[1].set_xlabel("Time")
+    axes[1].legend(loc="upper right")
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(out_dir / "reset_countdowns_last_48h.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_sampling_interval_distribution(claude_history: pd.DataFrame, codex_history: pd.DataFrame, out_dir: Path):
+    interval_rows = []
+    for name, frame in (("Claude", claude_history), ("Codex", codex_history)):
+        if frame.empty:
+            continue
+        intervals = frame["datetime"].diff().dropna().dt.total_seconds() / 60.0
+        intervals = intervals[(intervals > 0) & (intervals <= 30)]
+        for value in intervals:
+            interval_rows.append({"service": name, "interval_minutes": value})
+    interval_frame = pd.DataFrame(interval_rows)
+    if interval_frame.empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    for label, color in (("Claude", "#b22222"), ("Codex", "#264653")):
+        subset = interval_frame[interval_frame["service"] == label]["interval_minutes"]
+        if subset.empty:
+            continue
+        ax.hist(subset, bins=30, alpha=0.55, label=f"{label} sample interval", color=color)
+        ax.axvline(subset.median(), color=color, linestyle="--", linewidth=2)
+    configure_axes(ax, "Sampling Interval Distribution", "Sample count")
+    ax.set_xlabel("Minutes between stored samples")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_dir / "sampling_interval_distribution.png", dpi=150)
     plt.close(fig)
 
 
@@ -508,11 +677,15 @@ def build_summary(
         lines.append(f"Top Claude model by tokens: {leader} at {share:.1f}% of tracked daily tokens.")
     if not claude_quota_history.empty:
         reset_count = int((claude_quota_history["session_delta"] < -20).sum())
+        claude_interval_minutes = claude_quota_history["datetime"].diff().dropna().dt.total_seconds().median() / 60.0
         lines.append(
             f"Claude quota history: {len(claude_quota_history)} samples from {claude_quota_history['datetime'].min()} to {claude_quota_history['datetime'].max()}."
         )
         lines.append(
             f"Observed {reset_count} large session reset drops in the recorded quota history."
+        )
+        lines.append(
+            f"Claude sampling cadence median: {claude_interval_minutes:.2f} minutes between stored samples."
         )
     else:
         lines.append("Claude quota history: no sqlite samples recorded yet.")
@@ -533,12 +706,21 @@ def build_summary(
         start = history.iloc[0]
         end = history.iloc[-1]
         duration_minutes = history["minutes_from_start"].iloc[-1]
+        codex_interval_minutes = history["datetime"].diff().dropna().dt.total_seconds().median() / 60.0
         lines.append(
             f"Codex history: {len(history)} unique points from {start['datetime']} to {end['datetime']} ({duration_minutes:.1f} minutes)."
         )
         lines.append(
             f"Codex primary moved from {int(start['primary_pct'])}% to {int(end['primary_pct'])}%; secondary moved from {int(start['secondary_pct'])}% to {int(end['secondary_pct'])}%."
         )
+        lines.append(
+            f"Codex sampling cadence median: {codex_interval_minutes:.2f} minutes between stored samples."
+        )
+        last_48h = history[history["datetime"] >= (end["datetime"] - pd.Timedelta(hours=48))]
+        if not last_48h.empty:
+            lines.append(
+                f"Codex last 48h window: {len(last_48h)} points from {last_48h['datetime'].min()} to {last_48h['datetime'].max()}."
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -592,6 +774,7 @@ def main():
     if not claude_quota_history.empty:
         plot_claude_quota_history(claude_quota_history, args.out_dir)
         plot_claude_quota_zoom(claude_quota_history, args.out_dir)
+        plot_claude_quota_last_48h(claude_quota_history, args.out_dir)
     if not daily.empty:
         plot_claude_tokens_per_session(daily, args.out_dir)
     if not daily.empty and "inferred_active_hours" in daily:
@@ -605,6 +788,11 @@ def main():
         plot_claude_session_burn_proxy(session_estimates, args.out_dir)
     if not history.empty:
         plot_codex_session_burn(history, args.out_dir)
+        plot_codex_session_burn_last_48h(history, args.out_dir)
+    if not claude_quota_history.empty and not history.empty:
+        plot_quota_comparison_last_48h(claude_quota_history, history, args.out_dir)
+        plot_reset_countdowns_last_48h(claude_quota_history, history, args.out_dir)
+        plot_sampling_interval_distribution(claude_quota_history, history, args.out_dir)
 
     summary = build_summary(
         stats_meta,

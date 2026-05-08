@@ -1,5 +1,6 @@
 /// Fire-and-forget desktop notification via notify-send.
 pub fn send(summary: &str, body: &str) {
+    crate::storage::append_notification_event(summary, body);
     let _ = std::process::Command::new("notify-send")
         .args(["--app-name=status-overlay", "--icon=dialog-warning", summary, body])
         .spawn();

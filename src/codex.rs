@@ -17,6 +17,14 @@ pub struct CodexData {
     pub attempted_at: i64,
 }
 
+fn has_real_usage_windows(data: &CodexData) -> bool {
+    data.primary_resets_secs > 0
+        || data.secondary_resets_secs > 0
+        || data.primary_pct > 0
+        || data.secondary_pct > 0
+        || !data.plan.is_empty()
+}
+
 #[derive(Deserialize)]
 struct AuthFile {
     #[serde(rename = "OPENAI_API_KEY")]
@@ -90,11 +98,12 @@ pub fn fmt_resets(secs: u64) -> String {
     format!("resets {}", target.format("%a %-I:%M %p"))
 }
 
-/// Returns `None` when the API call fails. Returns `Some(default)` when no token is configured.
+/// Returns `None` when the API call fails, auth is missing, or the response
+/// does not contain usable quota windows.
 pub fn fetch() -> Option<CodexData> {
     let token = match read_token() {
         Some(t) => t,
-        None => return Some(CodexData::default()),
+        None => return None,
     };
 
     let body = ureq::get("https://chatgpt.com/backend-api/wham/usage")
@@ -111,7 +120,7 @@ pub fn fetch() -> Option<CodexData> {
     let primary = resp.rate_limit.as_ref().and_then(|r| r.primary_window.as_ref());
     let secondary = resp.rate_limit.as_ref().and_then(|r| r.secondary_window.as_ref());
 
-    Some(CodexData {
+    let data = CodexData {
         plan: resp.plan_type.unwrap_or_default(),
         primary_pct: primary.and_then(|w| w.used_percent).unwrap_or(0),
         primary_resets_secs: primary.and_then(|w| w.reset_after_seconds).unwrap_or(0),
@@ -120,5 +129,68 @@ pub fn fetch() -> Option<CodexData> {
         stale: false,
         fetched_at: Local::now().timestamp(),
         attempted_at: Local::now().timestamp(),
-    })
+    };
+
+    has_real_usage_windows(&data).then_some(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::Mutex,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_temp_codex_home(test: impl FnOnce(PathBuf)) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_codex_home = std::env::var_os("CODEX_HOME");
+        let old_home = std::env::var_os("HOME");
+        let unique = format!(
+            "status-overlay-codex-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&root).unwrap();
+        unsafe {
+            std::env::set_var("CODEX_HOME", &root);
+            std::env::set_var("HOME", &root);
+        }
+        test(root.clone());
+        unsafe {
+            match old_codex_home {
+                Some(value) => std::env::set_var("CODEX_HOME", value),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+            match old_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fetch_returns_none_without_auth_token() {
+        with_temp_codex_home(|_| {
+            assert!(fetch().is_none());
+        });
+    }
+
+    #[test]
+    fn has_real_usage_windows_rejects_empty_logged_out_shape() {
+        assert!(!has_real_usage_windows(&CodexData::default()));
+        assert!(has_real_usage_windows(&CodexData {
+            primary_resets_secs: 18_000,
+            ..Default::default()
+        }));
+    }
 }

@@ -416,9 +416,15 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         );
                         claude_pre_reset_notice_sent = true;
                     }
-                    let depleted = data.session_pct >= 100.0 && data.weekly_pct >= 100.0;
-                    let avail_secs = data.session_resets_secs.max(data.weekly_resets_secs);
-                    if depleted {
+                    let session_blocked = data.session_pct >= 100.0;
+                    let weekly_blocked = data.weekly_pct >= 100.0;
+                    let avail_secs = match (session_blocked, weekly_blocked) {
+                        (true, true) => data.session_resets_secs.max(data.weekly_resets_secs),
+                        (true, false) => data.session_resets_secs,
+                        (false, true) => data.weekly_resets_secs,
+                        (false, false) => 0,
+                    };
+                    if session_blocked || weekly_blocked {
                         if avail_secs > 0 && avail_secs <= 3600 && !claude_recover_notice_sent {
                             notify::send("Claude back soon", "Quota should reopen in ~1 hour");
                             claude_recover_notice_sent = true;
@@ -513,6 +519,7 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         && primary_remaining >= 30
                         && !codex_primary_pre_reset_sent
                         && data.primary_pct < 100
+                        && data.secondary_pct < 95
                     {
                         notify::send(
                             "Codex 5h resets in ~1h",
@@ -551,9 +558,15 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                         codex_pre_reset_1h_sent = true;
                     }
 
-                    let depleted = data.primary_pct >= 100 && data.secondary_pct >= 100;
-                    let avail_secs = data.primary_resets_secs.max(data.secondary_resets_secs);
-                    if depleted {
+                    let primary_blocked = data.primary_pct >= 100;
+                    let secondary_blocked = data.secondary_pct >= 100;
+                    let avail_secs = match (primary_blocked, secondary_blocked) {
+                        (true, true) => data.primary_resets_secs.max(data.secondary_resets_secs),
+                        (true, false) => data.primary_resets_secs,
+                        (false, true) => data.secondary_resets_secs,
+                        (false, false) => 0,
+                    };
+                    if primary_blocked || secondary_blocked {
                         if avail_secs > 0 && avail_secs <= 3600 && !codex_recover_notice_sent {
                             notify::send("Codex back soon", "Quota should reopen in ~1 hour");
                             codex_recover_notice_sent = true;

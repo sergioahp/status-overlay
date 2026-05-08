@@ -102,6 +102,16 @@ fn init_history_db(conn: &Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_codex_usage_samples_fetched_at
         ON codex_usage_samples (fetched_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS notification_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recorded_at INTEGER NOT NULL,
+            summary TEXT NOT NULL,
+            body TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_notification_events_recorded_at
+        ON notification_events (recorded_at DESC, id DESC);
         ",
     )
 }
@@ -243,6 +253,11 @@ fn load_latest_codex_from_db() -> Option<crate::codex::CodexData> {
             "
             SELECT snapshot_json
             FROM codex_usage_samples
+            WHERE primary_resets_secs > 0
+               OR secondary_resets_secs > 0
+               OR primary_pct > 0
+               OR secondary_pct > 0
+               OR plan <> ''
             ORDER BY fetched_at DESC, id DESC
             LIMIT 1
             ",
@@ -309,6 +324,23 @@ pub fn append_codex_sample(data: &crate::codex::CodexData) {
         return;
     };
     let _ = insert_codex_row(&conn, data);
+}
+
+pub fn append_notification_event(summary: &str, body: &str) {
+    let Some(conn) = open_history_db() else {
+        return;
+    };
+    let _ = conn.execute(
+        "
+        INSERT INTO notification_events (
+            recorded_at,
+            summary,
+            body
+        )
+        VALUES (?1, ?2, ?3)
+        ",
+        params![Utc::now().timestamp(), summary, body],
+    );
 }
 
 #[cfg(test)]
@@ -411,6 +443,62 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM codex_usage_samples", [], |row| row.get(0))
                 .unwrap();
             assert_eq!(count_after, 4);
+        });
+    }
+
+    #[test]
+    fn append_notification_event_persists_to_sqlite() {
+        with_temp_state_home(|_| {
+            append_notification_event("Claude back soon", "Quota should reopen in ~1 hour");
+
+            let conn = Connection::open(history_db_path()).unwrap();
+            let row: (String, String) = conn
+                .query_row(
+                    "
+                    SELECT summary, body
+                    FROM notification_events
+                    ORDER BY recorded_at DESC, id DESC
+                    LIMIT 1
+                    ",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(row.0, "Claude back soon");
+            assert_eq!(row.1, "Quota should reopen in ~1 hour");
+        });
+    }
+
+    #[test]
+    fn load_codex_ignores_logged_out_zero_rows() {
+        with_temp_state_home(|_| {
+            append_codex_sample(&crate::codex::CodexData {
+                plan: "plus".to_string(),
+                primary_pct: 12,
+                primary_resets_secs: 17_000,
+                secondary_pct: 34,
+                secondary_resets_secs: 480_000,
+                fetched_at: 10,
+                attempted_at: 10,
+                ..Default::default()
+            });
+
+            let conn = Connection::open(history_db_path()).unwrap();
+            insert_codex_row(
+                &conn,
+                &crate::codex::CodexData {
+                    fetched_at: 20,
+                    attempted_at: 20,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            let loaded = load_codex().expect("codex sample should load from sqlite");
+            assert_eq!(loaded.primary_pct, 12);
+            assert_eq!(loaded.secondary_pct, 34);
+            assert_eq!(loaded.primary_resets_secs, 17_000);
+            assert_eq!(loaded.secondary_resets_secs, 480_000);
         });
     }
 }
