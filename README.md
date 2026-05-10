@@ -5,6 +5,8 @@
 
 A floating Wayland overlay built in Rust with GTK4 and layer-shell. Shows the time, date, calendar, and live Claude AI usage stats — all in a blurred, translucent panel that floats above everything without stealing focus.
 
+![status-overlay screenshot](assets/screenshot-overlay.png)
+
 ## ✨ Features
 
 - **⏰ Live clock** — seconds-accurate, updates every tick
@@ -92,8 +94,6 @@ Desktop notifications fire via `notify-send` when:
 | Restored | drops back below 30% |
 
 ### Claude
-
-
 
 Reads from two local sources — no extra config needed if you use Claude Code:
 
