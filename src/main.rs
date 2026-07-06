@@ -686,7 +686,9 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
         codex_on_show.notify_one();
     });
 
-    window.present();
+    // Start hidden: the daemon comes up with Hyprland but the overlay only maps
+    // when asked over IPC (show / toggle). The ApplicationWindow keeps the GTK
+    // app alive even while unmapped, so we deliberately do not present() here.
 }
 
 fn main() {
