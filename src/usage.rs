@@ -625,13 +625,21 @@ fn fetch_cli(today_messages: u64, today_tool_calls: u64) -> Option<UsageData> {
     cmd.stderr(unsafe { std::fs::File::from_raw_fd(slave_err) });
 
     // In the child (between fork and exec): make the slave the controlling
-    // terminal so that claude's TUI works correctly.
-    // Safety: setsid() and ioctl() are async-signal-safe.
+    // terminal so that claude's TUI works correctly, and pin the probe to a
+    // single core — its startup otherwise spikes all cores, and a background
+    // usage check is not latency-sensitive. Affinity is inherited across exec
+    // and by every thread claude spawns; interactive launches are unaffected.
+    // Safety: setsid(), ioctl() and the sched_setaffinity syscall are
+    // async-signal-safe (no allocation).
     let slave_for_ctty = slave;
     unsafe {
         cmd.pre_exec(move || {
             libc::setsid();
             libc::ioctl(slave_for_ctty, libc::TIOCSCTTY, 0i32);
+            let mut cpus: libc::cpu_set_t = std::mem::zeroed();
+            libc::CPU_SET(0, &mut cpus);
+            // Best effort: on failure the probe still works, just unpinned.
+            libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &cpus);
             Ok(())
         });
     }
