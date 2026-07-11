@@ -1,6 +1,6 @@
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::net::{UnixListener, UnixStream},
+    os::unix::{fs::PermissionsExt, net::{UnixListener, UnixStream}},
     path::PathBuf,
     sync::mpsc::Sender,
 };
@@ -41,6 +41,8 @@ pub fn listen(tx: Sender<Command>) {
             return;
         }
     };
+    // Restrict to owner only — connect(2) requires write permission on the socket file.
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
 
     for stream in listener.incoming() {
         match stream {
