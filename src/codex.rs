@@ -7,8 +7,12 @@ pub struct CodexData {
     pub plan: String,
     pub primary_pct: u32,
     pub primary_resets_secs: u64,
+    #[serde(default)]
+    pub primary_present: bool,
     pub secondary_pct: u32,
     pub secondary_resets_secs: u64,
+    #[serde(default)]
+    pub secondary_present: bool,
     #[serde(default)]
     pub stale: bool,
     #[serde(default)]
@@ -23,6 +27,22 @@ pub struct CodexData {
 // gate on whether the window itself was present in the payload.
 fn has_usable_window(window: Option<&Window>) -> bool {
     window.is_some_and(|w| w.used_percent.is_some() || w.reset_after_seconds.is_some())
+}
+
+// The API does not reliably put the 5h session window in `primary_window`
+// and the 7d weekly window in `secondary_window` — it's been observed
+// returning only the weekly window, sitting alone in `primary_window` with
+// `secondary_window: null`. That made the overlay label 13% weekly usage as
+// "5h session" while the real weekly row defaulted to a false 0%. Classify
+// by `limit_window_seconds` instead of struct position.
+const SESSION_WINDOW_MAX_SECS: u64 = 6 * 3600;
+
+fn is_session_window(window: &Window) -> bool {
+    window.limit_window_seconds.is_some_and(|s| s <= SESSION_WINDOW_MAX_SECS)
+}
+
+fn is_weekly_window(window: &Window) -> bool {
+    window.limit_window_seconds.is_some_and(|s| s > SESSION_WINDOW_MAX_SECS)
 }
 
 #[derive(Deserialize)]
@@ -53,6 +73,7 @@ struct RateLimit {
 struct Window {
     used_percent: Option<u32>,
     reset_after_seconds: Option<u64>,
+    limit_window_seconds: Option<u64>,
 }
 
 fn codex_dir() -> PathBuf {
@@ -116,7 +137,10 @@ pub fn fetch() -> Option<CodexData> {
         .ok()?;
 
     let resp: UsageResponse = serde_json::from_str(&body).ok()?;
+    build_codex_data(resp)
+}
 
+fn build_codex_data(resp: UsageResponse) -> Option<CodexData> {
     let primary = resp.rate_limit.as_ref().and_then(|r| r.primary_window.as_ref());
     let secondary = resp.rate_limit.as_ref().and_then(|r| r.secondary_window.as_ref());
 
@@ -124,12 +148,33 @@ pub fn fetch() -> Option<CodexData> {
         return None;
     }
 
+    let typed = primary.is_some_and(|w| w.limit_window_seconds.is_some())
+        || secondary.is_some_and(|w| w.limit_window_seconds.is_some());
+    let (session, weekly) = if typed {
+        let mut session = None;
+        let mut weekly = None;
+        for w in [primary, secondary].into_iter().flatten() {
+            if is_session_window(w) {
+                session.get_or_insert(w);
+            } else if is_weekly_window(w) {
+                weekly.get_or_insert(w);
+            }
+        }
+        (session, weekly)
+    } else {
+        // No window carries `limit_window_seconds` (older/degraded
+        // response) — fall back to struct position.
+        (primary, secondary)
+    };
+
     Some(CodexData {
         plan: resp.plan_type.unwrap_or_default(),
-        primary_pct: primary.and_then(|w| w.used_percent).unwrap_or(0),
-        primary_resets_secs: primary.and_then(|w| w.reset_after_seconds).unwrap_or(0),
-        secondary_pct: secondary.and_then(|w| w.used_percent).unwrap_or(0),
-        secondary_resets_secs: secondary.and_then(|w| w.reset_after_seconds).unwrap_or(0),
+        primary_pct: session.and_then(|w| w.used_percent).unwrap_or(0),
+        primary_resets_secs: session.and_then(|w| w.reset_after_seconds).unwrap_or(0),
+        primary_present: session.is_some(),
+        secondary_pct: weekly.and_then(|w| w.used_percent).unwrap_or(0),
+        secondary_resets_secs: weekly.and_then(|w| w.reset_after_seconds).unwrap_or(0),
+        secondary_present: weekly.is_some(),
         stale: false,
         fetched_at: Local::now().timestamp(),
         attempted_at: Local::now().timestamp(),
@@ -193,14 +238,90 @@ mod tests {
         assert!(!has_usable_window(Some(&Window {
             used_percent: None,
             reset_after_seconds: None,
+            limit_window_seconds: None,
         })));
         assert!(has_usable_window(Some(&Window {
             used_percent: Some(0),
             reset_after_seconds: None,
+            limit_window_seconds: None,
         })));
         assert!(has_usable_window(Some(&Window {
             used_percent: None,
             reset_after_seconds: Some(18_000),
+            limit_window_seconds: None,
         })));
+    }
+
+    // Live payload observed 2026-07-12: only the 7d weekly window came back,
+    // sitting alone in the `primary_window` slot with `secondary_window:
+    // null`. Before classifying by `limit_window_seconds` this rendered as
+    // "5h session 13%, resets in a week" while the real weekly row showed a
+    // false 0%.
+    #[test]
+    fn build_codex_data_classifies_lone_weekly_window_in_primary_slot() {
+        let resp = UsageResponse {
+            plan_type: Some("plus".into()),
+            rate_limit: Some(RateLimit {
+                primary_window: Some(Window {
+                    used_percent: Some(13),
+                    reset_after_seconds: Some(601_729),
+                    limit_window_seconds: Some(604_800),
+                }),
+                secondary_window: None,
+            }),
+        };
+        let data = build_codex_data(resp).expect("weekly-only response should be usable");
+        assert_eq!(data.primary_pct, 0);
+        assert_eq!(data.primary_resets_secs, 0);
+        assert!(!data.primary_present);
+        assert_eq!(data.secondary_pct, 13);
+        assert_eq!(data.secondary_resets_secs, 601_729);
+        assert!(data.secondary_present);
+    }
+
+    #[test]
+    fn build_codex_data_classifies_both_windows_by_duration() {
+        let resp = UsageResponse {
+            plan_type: Some("plus".into()),
+            rate_limit: Some(RateLimit {
+                primary_window: Some(Window {
+                    used_percent: Some(40),
+                    reset_after_seconds: Some(3_600),
+                    limit_window_seconds: Some(18_000),
+                }),
+                secondary_window: Some(Window {
+                    used_percent: Some(13),
+                    reset_after_seconds: Some(601_729),
+                    limit_window_seconds: Some(604_800),
+                }),
+            }),
+        };
+        let data = build_codex_data(resp).expect("fully typed response should be usable");
+        assert_eq!(data.primary_pct, 40);
+        assert_eq!(data.primary_resets_secs, 3_600);
+        assert_eq!(data.secondary_pct, 13);
+        assert_eq!(data.secondary_resets_secs, 601_729);
+    }
+
+    #[test]
+    fn build_codex_data_falls_back_to_struct_position_without_limit_window_seconds() {
+        let resp = UsageResponse {
+            plan_type: Some("plus".into()),
+            rate_limit: Some(RateLimit {
+                primary_window: Some(Window {
+                    used_percent: Some(40),
+                    reset_after_seconds: Some(3_600),
+                    limit_window_seconds: None,
+                }),
+                secondary_window: Some(Window {
+                    used_percent: Some(13),
+                    reset_after_seconds: Some(601_729),
+                    limit_window_seconds: None,
+                }),
+            }),
+        };
+        let data = build_codex_data(resp).expect("legacy response should be usable");
+        assert_eq!(data.primary_pct, 40);
+        assert_eq!(data.secondary_pct, 13);
     }
 }

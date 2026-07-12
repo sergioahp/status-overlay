@@ -218,6 +218,13 @@ fn build_codex_section() -> (gtk::Box, impl Fn(&codex::CodexData), impl Fn(DateT
         section_lbl.set_text(if d.stale { "CODEX USAGE (stale)" } else { "CODEX USAGE" });
         primary_bar.set_fraction((d.primary_pct as f64 / 100.0).clamp(0.0, 1.0));
         secondary_bar.set_fraction((d.secondary_pct as f64 / 100.0).clamp(0.0, 1.0));
+        // The API only reports whichever quota windows are currently
+        // active — hide a row entirely rather than showing a frozen 0%
+        // when its window isn't present in the response.
+        primary_lbl.set_visible(d.primary_present);
+        primary_bar.set_visible(d.primary_present);
+        secondary_lbl.set_visible(d.secondary_present);
+        secondary_bar.set_visible(d.secondary_present);
 
         let elapsed = (now.timestamp() - d.fetched_at).max(0) as u64;
         let plan = if d.plan.is_empty() { String::new() } else { format!("  ({})", d.plan) };
