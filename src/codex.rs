@@ -17,12 +17,12 @@ pub struct CodexData {
     pub attempted_at: i64,
 }
 
-fn has_real_usage_windows(data: &CodexData) -> bool {
-    data.primary_resets_secs > 0
-        || data.secondary_resets_secs > 0
-        || data.primary_pct > 0
-        || data.secondary_pct > 0
-        || !data.plan.is_empty()
+// A response can carry a non-empty `plan_type` while `rate_limit` is null or
+// missing (seen during API hiccups). Checking the defaulted `CodexData` for
+// non-zero fields can't tell that apart from genuine 0%-used windows, so we
+// gate on whether the window itself was present in the payload.
+fn has_usable_window(window: Option<&Window>) -> bool {
+    window.is_some_and(|w| w.used_percent.is_some() || w.reset_after_seconds.is_some())
 }
 
 #[derive(Deserialize)]
@@ -120,7 +120,11 @@ pub fn fetch() -> Option<CodexData> {
     let primary = resp.rate_limit.as_ref().and_then(|r| r.primary_window.as_ref());
     let secondary = resp.rate_limit.as_ref().and_then(|r| r.secondary_window.as_ref());
 
-    let data = CodexData {
+    if !has_usable_window(primary) && !has_usable_window(secondary) {
+        return None;
+    }
+
+    Some(CodexData {
         plan: resp.plan_type.unwrap_or_default(),
         primary_pct: primary.and_then(|w| w.used_percent).unwrap_or(0),
         primary_resets_secs: primary.and_then(|w| w.reset_after_seconds).unwrap_or(0),
@@ -129,9 +133,7 @@ pub fn fetch() -> Option<CodexData> {
         stale: false,
         fetched_at: Local::now().timestamp(),
         attempted_at: Local::now().timestamp(),
-    };
-
-    has_real_usage_windows(&data).then_some(data)
+    })
 }
 
 #[cfg(test)]
@@ -186,11 +188,19 @@ mod tests {
     }
 
     #[test]
-    fn has_real_usage_windows_rejects_empty_logged_out_shape() {
-        assert!(!has_real_usage_windows(&CodexData::default()));
-        assert!(has_real_usage_windows(&CodexData {
-            primary_resets_secs: 18_000,
-            ..Default::default()
-        }));
+    fn has_usable_window_rejects_empty_window() {
+        assert!(!has_usable_window(None));
+        assert!(!has_usable_window(Some(&Window {
+            used_percent: None,
+            reset_after_seconds: None,
+        })));
+        assert!(has_usable_window(Some(&Window {
+            used_percent: Some(0),
+            reset_after_seconds: None,
+        })));
+        assert!(has_usable_window(Some(&Window {
+            used_percent: None,
+            reset_after_seconds: Some(18_000),
+        })));
     }
 }
