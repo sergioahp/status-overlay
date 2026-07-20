@@ -91,7 +91,7 @@ Desktop notifications fire via `notify-send` when:
 |-------|-----------|
 | Low warning | ≥ 90% used |
 | Depleted | ≥ 100% / limit reached |
-| Restored | drops back below 30% |
+| Restored | drops from at least 2% used to below 2% |
 
 ### Claude
 

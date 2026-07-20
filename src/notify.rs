@@ -1,14 +1,24 @@
-/// Fire-and-forget desktop notification via notify-send.
+/// Send a desktop notification via notify-send and log delivery failures.
 pub fn send(summary: &str, body: &str) {
     crate::storage::append_notification_event(summary, body);
-    let _ = std::process::Command::new("notify-send")
-        .args(["--app-name=status-overlay", "--icon=dialog-warning", summary, body])
-        .spawn();
+    let result = std::process::Command::new("notify-send")
+        .args([
+            "--app-name=status-overlay",
+            "--icon=dialog-warning",
+            summary,
+            body,
+        ])
+        .status();
+    match result {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("[notify] notify-send exited with {status}: {summary}"),
+        Err(error) => eprintln!("[notify] failed to run notify-send: {error}: {summary}"),
+    }
 }
 
-/// Thresholds
+/// Usage thresholds for warnings and reset detection.
 pub const WARN_PCT: u32 = 90;
-pub const RESTORE_PCT: u32 = 30;
+pub const RESTORE_PCT: u32 = 2;
 
 /// Returns what notification (if any) should fire given old → new percentage.
 pub enum Transition {
@@ -22,7 +32,7 @@ pub fn transition(prev: u32, next: u32) -> Option<Transition> {
         Some(Transition::Depleted)
     } else if prev < WARN_PCT && (WARN_PCT..100).contains(&next) {
         Some(Transition::Low)
-    } else if prev >= WARN_PCT && next < RESTORE_PCT {
+    } else if prev >= RESTORE_PCT && next < RESTORE_PCT {
         Some(Transition::Restored)
     } else {
         None
@@ -77,12 +87,17 @@ mod tests {
     fn restored_when_dropping_below_restore_threshold() {
         assert!(is_restored(transition(WARN_PCT, RESTORE_PCT - 1)));
         assert!(is_restored(transition(100, 0)));
-        assert!(is_restored(transition(95, 10)));
+        assert!(is_restored(transition(26, 0)));
     }
 
     #[test]
     fn not_restored_if_still_above_restore() {
         assert!(!is_restored(transition(95, RESTORE_PCT)));
+    }
+
+    #[test]
+    fn not_restored_for_sub_threshold_noise() {
+        assert!(!is_restored(transition(RESTORE_PCT - 1, 0)));
     }
 
     #[test]

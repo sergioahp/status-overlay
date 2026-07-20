@@ -67,6 +67,7 @@
             pkgs.graphene
             pkgs.sqlite
           ];
+          runtimePrograms = pkgs.lib.makeBinPath [ pkgs.libnotify ];
 
           commonArgs = {
             src = pkgs.lib.cleanSourceWith {
@@ -89,6 +90,7 @@
             postInstall = ''
               wrapProgram $out/bin/status-overlay \
                 --prefix LD_LIBRARY_PATH : ${runtimeLibs} \
+                --prefix PATH : ${runtimePrograms} \
                 --set STATUS_OVERLAY_CSS $out/share/status-overlay/style.css
               install -Dm644 src/style.css $out/share/status-overlay/style.css
             '';
@@ -108,7 +110,7 @@
 
           devShells.default = pkgs.mkShell {
             inputsFrom = [ status-overlay ];
-            packages = [ status-overlay toolchain pkgs.rust-analyzer ];
+            packages = [ status-overlay toolchain pkgs.rust-analyzer pkgs.libnotify ];
             LD_LIBRARY_PATH = runtimeLibs;
           };
         });

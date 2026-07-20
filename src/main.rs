@@ -484,10 +484,24 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
 
     let codex_notify = codex_refresh.clone();
     rt.spawn(async move {
-        let mut prev_primary: u32 = 0;
-        let mut prev_secondary: u32 = 0;
-        let mut prev_primary_reset_secs: u64 = 0;
-        let mut prev_secondary_reset_secs: u64 = 0;
+        let mut prev_primary = cached_codex
+            .as_ref()
+            .filter(|data| data.primary_present)
+            .map(|data| data.primary_pct);
+        let mut prev_secondary = cached_codex
+            .as_ref()
+            .filter(|data| data.secondary_present)
+            .map(|data| data.secondary_pct);
+        let mut prev_primary_reset_secs = cached_codex
+            .as_ref()
+            .filter(|data| data.primary_present)
+            .map(|data| data.primary_resets_secs)
+            .unwrap_or(0);
+        let mut prev_secondary_reset_secs = cached_codex
+            .as_ref()
+            .filter(|data| data.secondary_present)
+            .map(|data| data.secondary_resets_secs)
+            .unwrap_or(0);
         // Seed with stored data so a failed first fetch shows last known values.
         let mut last_data: Option<codex::CodexData> = cached_codex;
         let mut codex_recover_notice_sent = false;
@@ -502,19 +516,29 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     let mut data = data;
                     data.attempted_at = Local::now().timestamp();
                     data.fetched_at = data.attempted_at;
-                    if let Some(t) = notify::transition(prev_primary, data.primary_pct) {
-                        match t {
-                            notify::Transition::Low      => notify::send("Codex session low", &format!("{}% of session used", data.primary_pct)),
-                            notify::Transition::Depleted => notify::send("Codex session depleted", "Session quota reached"),
-                            notify::Transition::Restored => notify::send("Codex session restored", "Session quota available again"),
+                    if data.primary_present {
+                        if let Some(t) = prev_primary
+                            .and_then(|prev| notify::transition(prev, data.primary_pct))
+                        {
+                            match t {
+                                notify::Transition::Low      => notify::send("Codex session low", &format!("{}% of session used", data.primary_pct)),
+                                notify::Transition::Depleted => notify::send("Codex session depleted", "Session quota reached"),
+                                notify::Transition::Restored => notify::send("Codex session restored", "Session quota available again"),
+                            }
                         }
+                        prev_primary = Some(data.primary_pct);
                     }
-                    if let Some(t) = notify::transition(prev_secondary, data.secondary_pct) {
-                        match t {
-                            notify::Transition::Low      => notify::send("Codex weekly low", &format!("{}% of weekly quota used", data.secondary_pct)),
-                            notify::Transition::Depleted => notify::send("Codex weekly depleted", "Weekly quota reached"),
-                            notify::Transition::Restored => notify::send("Codex weekly restored", "Weekly quota available again"),
+                    if data.secondary_present {
+                        if let Some(t) = prev_secondary
+                            .and_then(|prev| notify::transition(prev, data.secondary_pct))
+                        {
+                            match t {
+                                notify::Transition::Low      => notify::send("Codex weekly low", &format!("{}% of weekly quota used", data.secondary_pct)),
+                                notify::Transition::Depleted => notify::send("Codex weekly depleted", "Weekly quota reached"),
+                                notify::Transition::Restored => notify::send("Codex weekly restored", "Weekly quota available again"),
+                            }
                         }
+                        prev_secondary = Some(data.secondary_pct);
                     }
                     // Primary (5h) pre-reset: >30% remains, within 1h
                     if data.primary_resets_secs > prev_primary_reset_secs + 60 {
@@ -581,10 +605,12 @@ fn activate(app: &gtk::Application, rt: tokio::runtime::Handle) {
                     } else {
                         codex_recover_notice_sent = false;
                     }
-                    prev_primary_reset_secs = data.primary_resets_secs;
-                    prev_secondary_reset_secs = data.secondary_resets_secs;
-                    prev_primary   = data.primary_pct;
-                    prev_secondary = data.secondary_pct;
+                    if data.primary_present {
+                        prev_primary_reset_secs = data.primary_resets_secs;
+                    }
+                    if data.secondary_present {
+                        prev_secondary_reset_secs = data.secondary_resets_secs;
+                    }
                     last_data = Some(data.clone());
                     storage::save_codex(&data);
                     storage::append_codex_sample(&data);
