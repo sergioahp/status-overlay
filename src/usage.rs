@@ -1,4 +1,5 @@
-use chrono::{Local, DateTime, Utc, Duration};
+use chrono::{Local, DateTime, Utc, Duration, Datelike, NaiveDate, NaiveTime, TimeZone, Weekday};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 use std::os::unix::fs::PermissionsExt;
@@ -556,38 +557,312 @@ fn extract_pct_after(text: &str, label: &str) -> Option<f64> {
     }
 }
 
+fn extract_reset_after<'a>(text: &'a str, label: &str, boundary: Option<&str>) -> Option<&'a str> {
+    let lowercase = text.to_ascii_lowercase();
+    let label = label.to_ascii_lowercase();
+    let label_pos = lowercase.find(&label)?;
+    let after = &text[label_pos + label.len()..];
+    let after_lowercase = &lowercase[label_pos + label.len()..];
+    let reset_pos = after_lowercase.find("resets")?;
+    if boundary
+        .map(str::to_ascii_lowercase)
+        .and_then(|value| after_lowercase.find(&value))
+        .is_some_and(|pos| pos < reset_pos)
+    {
+        return None;
+    }
+    let value = after[reset_pos + "Resets".len()..]
+        .trim_start()
+        .trim_start_matches(':')
+        .trim_start();
+    let line_end = value
+        .find(|character| character == '\r' || character == '\n')
+        .unwrap_or(value.len());
+    let value = value[..line_end].trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn latest_usage_panel(text: &str) -> &str {
+    let lowercase = text.to_ascii_lowercase();
+    let Some(start) = lowercase.rfind("settings:") else {
+        return text;
+    };
+    let panel = &text[start..];
+    let panel_lowercase = &lowercase[start..];
+    if panel_lowercase.contains("usage")
+        && (panel_lowercase.contains("current session")
+            || panel_lowercase.contains("loading usage"))
+    {
+        panel
+    } else {
+        text
+    }
+}
+
+fn duration_unit_secs(unit: &str) -> Option<u64> {
+    match unit.trim_end_matches('.').to_ascii_lowercase().as_str() {
+        "s" | "sec" | "secs" | "second" | "seconds" => Some(1),
+        "m" | "min" | "mins" | "minute" | "minutes" => Some(60),
+        "h" | "hr" | "hrs" | "hour" | "hours" => Some(3600),
+        "d" | "day" | "days" => Some(24 * 3600),
+        _ => None,
+    }
+}
+
+fn parse_relative_duration(value: &str) -> Option<u64> {
+    let compact = value
+        .to_ascii_lowercase()
+        .replace("and", "")
+        .replace(|character: char| character.is_whitespace() || character == ',', "");
+    if !compact.is_ascii() {
+        return None;
+    }
+    let bytes = compact.as_bytes();
+    let mut total = 0u64;
+    let mut parsed_any = false;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if !bytes[index].is_ascii_digit() {
+            index += 1;
+            continue;
+        }
+        let amount_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        let amount: u64 = compact[amount_start..index].parse().ok()?;
+        let unit_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_alphabetic() {
+            index += 1;
+        }
+        let multiplier = duration_unit_secs(&compact[unit_start..index])?;
+        total = total.checked_add(amount.checked_mul(multiplier)?)?;
+        parsed_any = true;
+    }
+
+    parsed_any.then_some(total)
+}
+
+fn parse_cli_time(value: &str) -> Option<NaiveTime> {
+    let compact = value
+        .trim()
+        .to_ascii_lowercase()
+        .replace(' ', "")
+        .replace('.', ":");
+    let (clock, is_pm) = if let Some(clock) = compact.strip_suffix("am") {
+        (clock, false)
+    } else if let Some(clock) = compact.strip_suffix("pm") {
+        (clock, true)
+    } else {
+        return NaiveTime::parse_from_str(&compact, "%H:%M").ok();
+    };
+    let (hour, minute) = match clock.split_once(':') {
+        Some((hour, minute)) => (hour.parse::<u32>().ok()?, minute.parse::<u32>().ok()?),
+        None => (clock.parse::<u32>().ok()?, 0),
+    };
+    if !(1..=12).contains(&hour) {
+        return None;
+    }
+    let hour = match (hour, is_pm) {
+        (12, false) => 0,
+        (12, true) => 12,
+        (hour, true) => hour + 12,
+        (hour, false) => hour,
+    };
+    NaiveTime::from_hms_opt(hour, minute, 0)
+}
+
+fn parse_cli_month(value: &str) -> Option<u32> {
+    match value.to_ascii_lowercase().as_str() {
+        "jan" | "january" => Some(1),
+        "feb" | "february" => Some(2),
+        "mar" | "march" => Some(3),
+        "apr" | "april" => Some(4),
+        "may" => Some(5),
+        "jun" | "june" => Some(6),
+        "jul" | "july" => Some(7),
+        "aug" | "august" => Some(8),
+        "sep" | "sept" | "september" => Some(9),
+        "oct" | "october" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "december" => Some(12),
+        _ => None,
+    }
+}
+
+fn parse_cli_weekday(value: &str) -> Option<Weekday> {
+    match value.to_ascii_lowercase().as_str() {
+        "mon" | "monday" => Some(Weekday::Mon),
+        "tue" | "tues" | "tuesday" => Some(Weekday::Tue),
+        "wed" | "wednesday" => Some(Weekday::Wed),
+        "thu" | "thur" | "thurs" | "thursday" => Some(Weekday::Thu),
+        "fri" | "friday" => Some(Weekday::Fri),
+        "sat" | "saturday" => Some(Weekday::Sat),
+        "sun" | "sunday" => Some(Weekday::Sun),
+        _ => None,
+    }
+}
+
+fn reset_secs(
+    date: NaiveDate,
+    time: NaiveTime,
+    now: DateTime<Local>,
+    timezone: Option<Tz>,
+) -> Option<u64> {
+    let target_timestamp = match timezone {
+        Some(timezone) => timezone
+            .from_local_datetime(&date.and_time(time))
+            .single()?
+            .timestamp(),
+        None => Local
+            .from_local_datetime(&date.and_time(time))
+            .single()?
+            .timestamp(),
+    };
+    target_timestamp
+        .checked_sub(now.timestamp())
+        .and_then(|seconds| u64::try_from(seconds).ok())
+}
+
+fn parse_cli_reset_secs(value: &str, now: DateTime<Local>) -> Option<u64> {
+    let timezone = value
+        .rfind('(')
+        .zip(value.rfind(')'))
+        .filter(|(start, end)| start < end)
+        .and_then(|(start, end)| value[start + 1..end].trim().parse::<Tz>().ok());
+    let timezone_start = value.rfind('(').unwrap_or(value.len());
+    let normalized = value[..timezone_start]
+        .trim()
+        .trim_start_matches(':')
+        .trim()
+        .replace(" at ", " ")
+        .replace(" At ", " ");
+    let value = normalized.as_str();
+    let lowercase = value.to_ascii_lowercase();
+    let reference = timezone
+        .map(|timezone| now.with_timezone(&timezone).naive_local())
+        .unwrap_or_else(|| now.naive_local());
+
+    if let Some(relative) = lowercase.strip_prefix("in") {
+        let relative = relative.trim_start();
+        if relative.starts_with(|character: char| character.is_ascii_digit()) {
+            return parse_relative_duration(relative);
+        }
+    }
+
+    if let Some(time_value) = lowercase.strip_prefix("tomorrow") {
+        let time = parse_cli_time(time_value.trim())?;
+        return reset_secs(reference.date() + Duration::days(1), time, now, timezone);
+    }
+
+    let day_start = value.find(|character: char| character.is_ascii_digit());
+    if let Some(day_start) = day_start
+        && parse_cli_month(value[..day_start].trim()).is_some()
+    {
+        let day_end = value[day_start..]
+            .find(|character: char| !character.is_ascii_digit())
+            .map(|offset| day_start + offset)
+            .unwrap_or(value.len());
+        let month = parse_cli_month(value[..day_start].trim())?;
+        let day: u32 = value[day_start..day_end].parse().ok()?;
+        let time = parse_cli_time(value[day_end..].trim_start_matches(',').trim())?;
+        let mut year = reference.year();
+        let mut date = NaiveDate::from_ymd_opt(year, month, day)?;
+        if reset_secs(date, time, now, timezone).is_none() {
+            year = year.checked_add(1)?;
+            date = NaiveDate::from_ymd_opt(year, month, day)?;
+        }
+        return reset_secs(date, time, now, timezone);
+    }
+
+    let weekday_and_time = [
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        "mon", "tues", "tue", "wed", "thurs", "thur", "thu", "fri", "sat", "sun",
+    ]
+    .iter()
+    .find_map(|weekday| lowercase.strip_prefix(weekday).map(|time| (*weekday, time.trim())));
+    if let Some((weekday_value, time_value)) = weekday_and_time
+        && let Some(weekday) = parse_cli_weekday(weekday_value)
+        && let Some(time) = parse_cli_time(time_value)
+    {
+        let mut days = (weekday.num_days_from_monday() as i64
+            - reference.weekday().num_days_from_monday() as i64)
+            .rem_euclid(7);
+        if days == 0 && time <= reference.time() {
+            days = 7;
+        }
+        return reset_secs(reference.date() + Duration::days(days), time, now, timezone);
+    }
+
+    let time = parse_cli_time(value)?;
+    let mut date = reference.date();
+    if time <= reference.time() {
+        date += Duration::days(1);
+    }
+    reset_secs(date, time, now, timezone)
+}
+
+fn extract_cli_plan(text: &str) -> String {
+    ["Pro", "Max", "Team", "Enterprise", "Free"]
+        .iter()
+        .find(|plan| {
+            text.contains(&format!("Claude {plan}")) || text.contains(&format!("Claude{plan}"))
+        })
+        .map(|plan| (*plan).to_string())
+        .unwrap_or_default()
+}
+
 fn parse_usage_text(
     text: &str,
     today_messages: u64,
     today_tool_calls: u64,
 ) -> Option<UsageData> {
-    let session_pct = extract_pct_after(text, "Current session")
-        .or_else(|| extract_pct_after(text, "current session"))?;
+    let usage_panel = latest_usage_panel(text);
+    let session_pct = extract_pct_after(usage_panel, "Current session")
+        .or_else(|| extract_pct_after(usage_panel, "current session"))?;
 
-    let weekly_pct = extract_pct_after(text, "Current week (all models)")
-        .or_else(|| extract_pct_after(text, "Current week (Opus)"))
-        .or_else(|| extract_pct_after(text, "Current week (Sonnet only)"))
-        .or_else(|| extract_pct_after(text, "Current week (Sonnet)"))
-        .or_else(|| extract_pct_after(text, "Current week"))
+    let weekly_pct = extract_pct_after(usage_panel, "Current week (all models)")
+        .or_else(|| extract_pct_after(usage_panel, "Current week (Opus)"))
+        .or_else(|| extract_pct_after(usage_panel, "Current week (Sonnet only)"))
+        .or_else(|| extract_pct_after(usage_panel, "Current week (Sonnet)"))
+        .or_else(|| extract_pct_after(usage_panel, "Current week"))
         .unwrap_or(0.0);
 
+    let now = Local::now();
+    let session_reset_value = extract_reset_after(usage_panel, "Current session", Some("Current week"));
+    let session_resets_secs = session_reset_value
+        .and_then(|value| parse_cli_reset_secs(value, now))
+        .unwrap_or(0);
+    let weekly_reset_value = extract_reset_after(usage_panel, "Current week", Some("Extra usage"));
+    let weekly_resets_secs = weekly_reset_value
+        .and_then(|value| parse_cli_reset_secs(value, now))
+        .unwrap_or(0);
+    if let Some(value) = session_reset_value.filter(|_| session_resets_secs == 0) {
+        eprintln!("[claude cli] could not parse session reset: {value:?}");
+    }
+    if let Some(value) = weekly_reset_value.filter(|_| weekly_resets_secs == 0) {
+        eprintln!("[claude cli] could not parse weekly reset: {value:?}");
+    }
+    let plan = extract_cli_plan(text);
+
     eprintln!(
-        "[claude cli] parsed session={session_pct:.0}% weekly={weekly_pct:.0}%"
+        "[claude cli] parsed session={session_pct:.0}% weekly={weekly_pct:.0}% session_reset={session_resets_secs}s weekly_reset={weekly_resets_secs}s plan={plan}"
     );
 
     Some(UsageData {
         session_pct,
-        session_resets_secs: 0,
-        session_resets: String::new(),
+        session_resets_secs,
+        session_resets: human_reset(session_resets_secs),
         weekly_pct,
-        weekly_resets_secs: 0,
-        weekly_resets: String::new(),
+        weekly_resets_secs,
+        weekly_resets: human_reset(weekly_resets_secs),
         extra_used_cents: 0.0,
         extra_limit_cents: 0.0,
         extra_enabled: false,
         today_messages,
         today_tool_calls,
-        plan: String::new(),
+        plan,
         stale: false,
         fetched_at: Local::now().timestamp(),
         attempted_at: Local::now().timestamp(),
@@ -998,6 +1273,89 @@ mod tests {
         );
     }
 
+    // ── CLI metadata parsing ─────────────────────────────────────────────────
+
+    fn cli_test_now() -> DateTime<Local> {
+        Utc
+            .with_ymd_and_hms(2026, 7, 20, 21, 30, 0)
+            .single()
+            .expect("test timestamp should exist")
+            .with_timezone(&Local)
+    }
+
+    #[test]
+    fn parse_cli_reset_relative_formats() {
+        let now = cli_test_now();
+        assert_eq!(parse_cli_reset_secs("in 2 hr 28 min", now), Some(8880));
+        assert_eq!(parse_cli_reset_secs("in 2h 28m", now), Some(8880));
+        assert_eq!(parse_cli_reset_secs("in2hr28min", now), Some(8880));
+        assert_eq!(parse_cli_reset_secs("in 3 days", now), Some(259200));
+    }
+
+    #[test]
+    fn parse_cli_reset_absolute_formats() {
+        let now = cli_test_now();
+        assert_eq!(
+            parse_cli_reset_secs("6pm (America/Mexico_City)", now),
+            Some(9000)
+        );
+        assert_eq!(
+            parse_cli_reset_secs("Jul 23, 6am (America/Mexico_City)", now),
+            Some(225000)
+        );
+        assert_eq!(
+            parse_cli_reset_secs("Jul23,6am (America/Mexico_City)", now),
+            Some(225000)
+        );
+        assert_eq!(
+            parse_cli_reset_secs("Jul 23 6am (America/Mexico_City)", now),
+            Some(225000)
+        );
+        assert_eq!(
+            parse_cli_reset_secs("Thu 5:59 AM (America/Mexico_City)", now),
+            Some(224940)
+        );
+        assert_eq!(
+            parse_cli_reset_secs("Thu5:59AM (America/Mexico_City)", now),
+            Some(224940)
+        );
+        assert_eq!(
+            parse_cli_reset_secs("Thu at 5.59 AM (America/Mexico_City)", now),
+            Some(224940)
+        );
+        assert_eq!(
+            parse_cli_reset_secs("tomorrow 12:55 AM (America/Mexico_City)", now),
+            Some(33900)
+        );
+        assert_eq!(
+            parse_cli_reset_secs("tomorrow12:55AM (America/Mexico_City)", now),
+            Some(33900)
+        );
+    }
+
+    #[test]
+    fn parse_cli_reset_honors_explicit_timezone() {
+        let now = cli_test_now();
+        assert_eq!(
+            parse_cli_reset_secs("6pm (America/New_York)", now),
+            Some(1800)
+        );
+    }
+
+    #[test]
+    fn parse_cli_reset_invalid_is_none() {
+        assert_eq!(parse_cli_reset_secs("eventually", cli_test_now()), None);
+        assert_eq!(parse_cli_reset_secs("", cli_test_now()), None);
+    }
+
+    #[test]
+    fn parse_cli_plan_from_startup_text() {
+        assert_eq!(extract_cli_plan("Sonnet 5 · Claude Pro ·"), "Pro");
+        assert_eq!(extract_cli_plan("Sonnet5·ClaudePro·"), "Pro");
+        assert_eq!(extract_cli_plan("Claude Enterprise"), "Enterprise");
+        assert_eq!(extract_cli_plan("plan unavailable"), "");
+    }
+
     // ── parse_usage_text ──────────────────────────────────────────────────────
 
     #[test]
@@ -1046,6 +1404,63 @@ mod tests {
         let data = parse_usage_text(text, 0, 0).expect("should parse");
         assert_eq!(data.session_pct, 75.0);
         assert_eq!(data.weekly_pct, 50.0);
+    }
+
+    #[test]
+    fn parse_usage_text_includes_optional_cli_metadata() {
+        let text = concat!(
+            "Sonnet 5 · Claude Pro ·\r",
+            "Current session 25% used\r",
+            "Resets in 2 hr 28 min\r",
+            "Current week (all models) 74% used\r",
+            "Resets in 3 days\r",
+        );
+        let data = parse_usage_text(text, 10, 5).expect("core usage should parse");
+        assert_eq!(data.session_resets_secs, 8880);
+        assert_eq!(data.weekly_resets_secs, 259200);
+        assert_eq!(data.plan, "Pro");
+        assert_eq!(data.extra_used_cents, 0.0);
+        assert_eq!(data.extra_limit_cents, 0.0);
+        assert!(!data.extra_enabled);
+    }
+
+    #[test]
+    fn parse_usage_text_keeps_core_data_when_optional_fields_are_invalid() {
+        let text = concat!(
+            "Current session 25% used\r",
+            "Resets whenever\r",
+            "Current week (all models) 74% used\r",
+            "Resets eventually\r",
+            "Extra usage $unknown\r",
+        );
+        let data = parse_usage_text(text, 10, 5).expect("core usage should parse");
+        assert_eq!(data.session_pct, 25.0);
+        assert_eq!(data.weekly_pct, 74.0);
+        assert_eq!(data.session_resets_secs, 0);
+        assert_eq!(data.weekly_resets_secs, 0);
+        assert_eq!(data.extra_used_cents, 0.0);
+        assert_eq!(data.extra_limit_cents, 0.0);
+    }
+
+    #[test]
+    fn parse_usage_text_uses_latest_rendered_panel() {
+        let text = concat!(
+            "Settings: Usage\r",
+            "Current session 5% used\r",
+            "Resets in 1 hr\r",
+            "Current week (all models) 10% used\r",
+            "Resets in 1 day\r",
+            "Settings: Usage\r",
+            "Current session 25% used\r",
+            "Resets in 2 hr\r",
+            "Current week (all models) 74% used\r",
+            "Resets in 3 days\r",
+        );
+        let data = parse_usage_text(text, 0, 0).expect("latest panel should parse");
+        assert_eq!(data.session_pct, 25.0);
+        assert_eq!(data.weekly_pct, 74.0);
+        assert_eq!(data.session_resets_secs, 7200);
+        assert_eq!(data.weekly_resets_secs, 259200);
     }
 
     #[test]
