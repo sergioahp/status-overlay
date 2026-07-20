@@ -102,7 +102,10 @@ Reads from two local sources — no extra config needed if you use Claude Code:
 | `~/.claude/.credentials.json` | OAuth token for the Anthropic API |
 | `~/.claude/stats-cache.json` | Today's message + tool-call counts |
 
-Live usage (session %, weekly %, extra spend) is fetched from `https://api.anthropic.com/api/oauth/usage`.
+Live usage (session %, weekly %, extra spend) is read from Claude Code's usage
+panel first. The probe runs only from a private, empty runtime directory, never
+from a project directory. If the CLI probe fails, the overlay tries
+`https://api.anthropic.com/api/oauth/usage`, then the Claude web session.
 
 ### Codex
 

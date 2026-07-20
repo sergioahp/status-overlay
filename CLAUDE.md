@@ -78,3 +78,5 @@ Plain text over a Unix socket. Each message is a single line.
   `extra_usage.used_credits`, `extra_usage.monthly_limit` (cents)
 - **Local stats:** `~/.claude/stats-cache.json` → `dailyActivity[].messageCount`
 - Refreshed every 60 s from a background thread.
+- The CLI probe runs only from a private, empty directory below
+  `$XDG_RUNTIME_DIR/status-overlay`, never from a project directory.

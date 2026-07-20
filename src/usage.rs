@@ -1,6 +1,7 @@
 use chrono::{Local, DateTime, Utc, Duration};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::process::CommandExt;
 
@@ -329,6 +330,21 @@ fn find_claude_binary() -> Option<PathBuf> {
     None
 }
 
+/// A private, empty directory for the short-lived Claude usage probe.
+///
+/// Claude Code inspects its working directory during startup. Keeping the
+/// probe out of the user's projects prevents that background check from
+/// building project context or walking unrelated files.
+fn claude_probe_dir() -> Option<PathBuf> {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")?;
+    let dir = PathBuf::from(runtime_dir)
+        .join("status-overlay")
+        .join("claude-usage-probe");
+    fs::create_dir_all(&dir).ok()?;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).ok()?;
+    Some(dir)
+}
+
 /// Strip ANSI/VT escape sequences from raw PTY bytes, returning plain text.
 fn strip_ansi(input: &[u8]) -> String {
     let mut out: Vec<u8> = Vec::with_capacity(input.len());
@@ -519,14 +535,16 @@ fn pty_interact(master: libc::c_int) -> Option<String> {
 fn extract_pct_after(text: &str, label: &str) -> Option<f64> {
     let after = &text[text.find(label)? + label.len()..];
     // Find the first '%' within a reasonable window.
-    let pct_pos = after[..after.len().min(120)].find('%')?;
+    let pct_pos = after
+        .char_indices()
+        .take_while(|(index, _)| *index < 120)
+        .find_map(|(index, character)| (character == '%').then_some(index))?;
     let before_pct = after[..pct_pos].trim_end();
-    // Walk back from the end to find where the number starts.
-    let num_start = before_pct
-        .rfind(|c: char| !c.is_ascii_digit() && c != '.')
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let pct: f64 = before_pct[num_start..].parse().ok()?;
+    let pct: f64 = before_pct
+        .rsplit(|character: char| !character.is_ascii_digit() && character != '.')
+        .next()?
+        .parse()
+        .ok()?;
     // "remaining" appears AFTER the % sign on the same line.
     let after_pct = &after[pct_pos..];
     let line_end = after_pct.find('\n').unwrap_or(after_pct.len());
@@ -577,6 +595,7 @@ fn parse_usage_text(
 
 fn fetch_cli(today_messages: u64, today_tool_calls: u64) -> Option<UsageData> {
     let claude = find_claude_binary()?;
+    let probe_dir = claude_probe_dir()?;
 
     // ── Open PTY ──────────────────────────────────────────────────────────────
     let mut master: libc::c_int = -1;
@@ -618,6 +637,7 @@ fn fetch_cli(today_messages: u64, today_tool_calls: u64) -> Option<UsageData> {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLUMNS", "160");
     cmd.env("LINES", "50");
+    cmd.current_dir(probe_dir);
 
     // Safety: we own these raw fds and they are valid at this point.
     cmd.stdin( unsafe { std::fs::File::from_raw_fd(slave) });
@@ -962,6 +982,21 @@ mod tests {
         assert_eq!(extract_pct_after(text, "Current session"), Some(75.0));
     }
 
+    #[test]
+    fn extract_pct_handles_multibyte_text_past_search_window() {
+        let text = format!("Current session 74% used {}", "█".repeat(40));
+        assert_eq!(extract_pct_after(&text, "Current session"), Some(74.0));
+    }
+
+    #[test]
+    fn extract_pct_handles_multibyte_progress_bar_before_value() {
+        let text = format!("Current week (all models) {}74% used", "█".repeat(37));
+        assert_eq!(
+            extract_pct_after(&text, "Current week (all models)"),
+            Some(74.0)
+        );
+    }
+
     // ── parse_usage_text ──────────────────────────────────────────────────────
 
     #[test]
@@ -1024,16 +1059,17 @@ mod tests {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-/// Try sources in order: local CLI PTY probe → OAuth API → web session
-/// (browser cookies / env var). Returns None only when all sources fail.
+/// Try sources in order: an isolated Claude CLI probe, OAuth API, then web
+/// session (browser cookies / environment variable). Returns None only when
+/// all sources fail.
 pub fn fetch() -> Option<UsageData> {
     let (today_messages, today_tool_calls) = read_today_stats();
 
     if let Some(data) = fetch_cli(today_messages, today_tool_calls) {
-        eprintln!("[claude] CLI probe succeeded");
+        eprintln!("[claude] isolated CLI probe succeeded");
         return Some(data);
     }
-    eprintln!("[claude] CLI probe failed, trying OAuth…");
+    eprintln!("[claude] isolated CLI probe failed, trying OAuth…");
     if let Some(data) = fetch_oauth(today_messages, today_tool_calls) {
         eprintln!("[claude] OAuth succeeded");
         return Some(data);
