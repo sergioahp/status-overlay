@@ -127,14 +127,13 @@ pub fn fetch() -> Option<CodexData> {
         None => return None,
     };
 
-    let body = ureq::get("https://chatgpt.com/backend-api/wham/usage")
-        .set("Authorization", &format!("Bearer {token}"))
-        .set("Accept", "application/json")
-        .set("User-Agent", "CodexBar")
+    let mut response = ureq::get("https://chatgpt.com/backend-api/wham/usage")
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .header("User-Agent", "CodexBar")
         .call()
-        .ok()?
-        .into_string()
         .ok()?;
+    let body = response.body_mut().read_to_string().ok()?;
 
     let resp: UsageResponse = serde_json::from_str(&body).ok()?;
     build_codex_data(resp)

@@ -992,25 +992,28 @@ fn fetch_oauth(today_messages: u64, today_tool_calls: u64) -> Option<UsageData> 
         .map(normalize_plan)
         .unwrap_or_default();
 
-    let response = match ureq::get("https://api.anthropic.com/api/oauth/usage")
-        .set("Authorization", &format!("Bearer {}", creds.access_token))
-        .set("anthropic-beta", "oauth-2025-04-20")
-        .set("Accept", "application/json")
+    let mut response = match ureq::get("https://api.anthropic.com/api/oauth/usage")
+        .header("Authorization", &format!("Bearer {}", creds.access_token))
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("Accept", "application/json")
+        .config()
+        .http_status_as_error(false)
+        .build()
         .call()
     {
         Ok(r) => r,
-        Err(ureq::Error::Status(code, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            eprintln!("[claude oauth] HTTP {code}: {body}");
-            return None;
-        }
         Err(e) => {
             eprintln!("[claude oauth] request error: {e}");
             return None;
         }
     };
 
-    let body = response.into_string().ok()?;
+    let status = response.status();
+    let body = response.body_mut().read_to_string().unwrap_or_default();
+    if !status.is_success() {
+        eprintln!("[claude oauth] HTTP {}: {body}", status.as_u16());
+        return None;
+    }
     let resp: OAuthUsageResponse = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -1037,12 +1040,11 @@ fn fetch_web(today_messages: u64, today_tool_calls: u64) -> Option<UsageData> {
     let cookie = format!("sessionKey={session_key}");
 
     // 1. Resolve org UUID.
-    let orgs_body = ureq::get("https://claude.ai/api/organizations")
-        .set("Cookie", &cookie)
+    let mut orgs_response = ureq::get("https://claude.ai/api/organizations")
+        .header("Cookie", &cookie)
         .call()
-        .ok()?
-        .into_string()
         .ok()?;
+    let orgs_body = orgs_response.body_mut().read_to_string().ok()?;
     let orgs: Vec<OrgItem> = serde_json::from_str(&orgs_body).ok()?;
     let org_id = orgs
         .iter()
@@ -1056,14 +1058,13 @@ fn fetch_web(today_messages: u64, today_tool_calls: u64) -> Option<UsageData> {
         .map(|o| o.uuid.clone())?;
 
     // 2. Core usage.
-    let usage_body = ureq::get(&format!(
+    let mut usage_response = ureq::get(&format!(
         "https://claude.ai/api/organizations/{org_id}/usage"
     ))
-    .set("Cookie", &cookie)
+    .header("Cookie", &cookie)
     .call()
-    .ok()?
-    .into_string()
     .ok()?;
+    let usage_body = usage_response.body_mut().read_to_string().ok()?;
     let usage: WebUsageResponse = match serde_json::from_str(&usage_body) {
         Ok(r) => r,
         Err(e) => {
@@ -1077,18 +1078,18 @@ fn fetch_web(today_messages: u64, today_tool_calls: u64) -> Option<UsageData> {
         ureq::get(&format!(
             "https://claude.ai/api/organizations/{org_id}/overage_spend_limit"
         ))
-        .set("Cookie", &cookie)
+        .header("Cookie", &cookie)
         .call()
         .ok()
-        .and_then(|r| r.into_string().ok())
+        .and_then(|mut r| r.body_mut().read_to_string().ok())
         .and_then(|s| serde_json::from_str(&s).ok());
 
     // 4. Account info for plan name (best-effort).
     let plan: String = ureq::get("https://claude.ai/api/account")
-        .set("Cookie", &cookie)
+        .header("Cookie", &cookie)
         .call()
         .ok()
-        .and_then(|r| r.into_string().ok())
+        .and_then(|mut r| r.body_mut().read_to_string().ok())
         .and_then(|s| serde_json::from_str::<AccountResponse>(&s).ok())
         .and_then(|a| {
             a.memberships?
