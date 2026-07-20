@@ -1472,29 +1472,82 @@ mod tests {
         assert_eq!(data.session_pct, 60.0);
         assert_eq!(data.weekly_pct, 0.0);
     }
+
+    #[test]
+    fn source_priority_stops_after_oauth_success() {
+        let attempted = std::cell::RefCell::new(Vec::new());
+        let result = fetch_in_order(
+            || {
+                attempted.borrow_mut().push("oauth");
+                Some("oauth")
+            },
+            || {
+                attempted.borrow_mut().push("cli");
+                Some("cli")
+            },
+            || {
+                attempted.borrow_mut().push("web");
+                Some("web")
+            },
+        );
+        assert_eq!(result, Some("oauth"));
+        assert_eq!(*attempted.borrow(), ["oauth"]);
+    }
+
+    #[test]
+    fn source_priority_falls_back_from_oauth_to_cli_then_web() {
+        let attempted = std::cell::RefCell::new(Vec::new());
+        let result = fetch_in_order(
+            || {
+                attempted.borrow_mut().push("oauth");
+                None
+            },
+            || {
+                attempted.borrow_mut().push("cli");
+                None
+            },
+            || {
+                attempted.borrow_mut().push("web");
+                Some("web")
+            },
+        );
+        assert_eq!(result, Some("web"));
+        assert_eq!(*attempted.borrow(), ["oauth", "cli", "web"]);
+    }
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-/// Try sources in order: an isolated Claude CLI probe, OAuth API, then web
-/// session (browser cookies / environment variable). Returns None only when
-/// all sources fail.
-pub fn fetch() -> Option<UsageData> {
-    let (today_messages, today_tool_calls) = read_today_stats();
-
-    if let Some(data) = fetch_cli(today_messages, today_tool_calls) {
-        eprintln!("[claude] isolated CLI probe succeeded");
-        return Some(data);
-    }
-    eprintln!("[claude] isolated CLI probe failed, trying OAuth…");
-    if let Some(data) = fetch_oauth(today_messages, today_tool_calls) {
+fn fetch_in_order<T>(
+    oauth: impl FnOnce() -> Option<T>,
+    cli: impl FnOnce() -> Option<T>,
+    web: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    if let Some(data) = oauth() {
         eprintln!("[claude] OAuth succeeded");
         return Some(data);
     }
-    eprintln!("[claude] OAuth failed, trying web session…");
-    if let Some(data) = fetch_web(today_messages, today_tool_calls) {
+    eprintln!("[claude] OAuth failed, trying isolated CLI probe…");
+    if let Some(data) = cli() {
+        eprintln!("[claude] isolated CLI probe succeeded");
+        return Some(data);
+    }
+    eprintln!("[claude] isolated CLI probe failed, trying web session…");
+    if let Some(data) = web() {
         eprintln!("[claude] web session succeeded");
         return Some(data);
     }
     None
+}
+
+/// Try sources in order: OAuth API, an isolated Claude CLI probe, then web
+/// session (browser cookies / environment variable). Returns None only when
+/// all sources fail.
+pub fn fetch() -> Option<UsageData> {
+    let (today_messages, today_tool_calls) = read_today_stats();
+    fetch_in_order(
+        || fetch_oauth(today_messages, today_tool_calls),
+        || fetch_cli(today_messages, today_tool_calls),
+        || fetch_web(today_messages, today_tool_calls),
+    )
 }
