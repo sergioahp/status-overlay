@@ -534,10 +534,11 @@ fn pty_interact(master: libc::c_int) -> Option<String> {
 /// Handles both "X% used" (returned as-is) and "X% remaining" (inverted to used).
 fn extract_pct_after(text: &str, label: &str) -> Option<f64> {
     let after = &text[text.find(label)? + label.len()..];
-    // Find the first '%' within a reasonable window.
+    // TUI progress bars use multibyte block characters, so a single rendered
+    // row can occupy several hundred bytes even at a 160-column terminal.
     let pct_pos = after
         .char_indices()
-        .take_while(|(index, _)| *index < 120)
+        .take_while(|(index, _)| *index < 512)
         .find_map(|(index, character)| (character == '%').then_some(index))?;
     let before_pct = after[..pct_pos].trim_end();
     let pct: f64 = before_pct
@@ -990,7 +991,7 @@ mod tests {
 
     #[test]
     fn extract_pct_handles_multibyte_progress_bar_before_value() {
-        let text = format!("Current week (all models) {}74% used", "█".repeat(37));
+        let text = format!("Current week (all models) {}74% used", "█".repeat(50));
         assert_eq!(
             extract_pct_after(&text, "Current week (all models)"),
             Some(74.0)
